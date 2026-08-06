@@ -116,10 +116,18 @@ and no router ports are opened.
    Within the zone that does move, the GitHub Pages records matter:
    `mathslug.com A 185.199.108-111.153` and `www.mathslug.com CNAME mathslug.github.io`.
    Cloudflare's scan usually catches these, but verify before flipping nameservers.
-   - **Email will break unless handled.** The `MX eforward1/2/5.registrar-servers.com` records
-     are Namecheap's free forwarding, which only works while Namecheap hosts the zone's DNS.
-     Copying the MX records to Cloudflare does *not* preserve it. Replace with Cloudflare
-     Email Routing (free), or drop the MX + SPF records if no `@mathslug.com` address is in use.
+   - **Email must be migrated, not copied.** The `MX eforward1/2/5.registrar-servers.com`
+     records are Namecheap's free forwarding, which only works while Namecheap hosts the
+     zone's DNS — copying the MX records to Cloudflare does *not* carry the service across.
+     Many `@mathslug.com` addresses forward to one Gmail; nothing is ever *sent* from them,
+     and some downtime is acceptable. So the whole migration is:
+     1. Enable **Cloudflare Email Routing** (free), verify the Gmail destination.
+     2. Add a single **catch-all** rule → Gmail.
+     Catch-all means there is no list of existing addresses to capture beforehand and no
+     forgotten address to break; every `@mathslug.com` address keeps working. Tradeoff is
+     that spam to arbitrary addresses forwards instead of bouncing. Cloudflare manages the
+     MX and SPF records itself and applies SRS, so forwards don't fail SPF at Gmail.
+     Email Routing is receive-only, which is irrelevant here.
    - Set the GitHub Pages records to **DNS-only** (grey cloud), not proxied — Pages does its
      own TLS and proxying them causes redirect loops.
 3. `cloudflared` on the Pi with ingress rules:
