@@ -32,7 +32,9 @@ On the Pi itself:
    preseed the wifi in Imager's settings.
 2. `ssh mypi 'bash -s' < bootstrap.sh`
 3. Add the printed deploy key to each private repo as a **read-only** deploy key.
-4. `ssh mypi 'bash -s' -- <app> < deploy-app.sh` for each app.
+4. `cat apps/<app>.conf deploy-app.sh | ssh mypi 'bash -s -- <app>'` for each app.
+   (The config is prepended because a script piped over stdin cannot locate
+   its own `apps/` directory.)
 5. Restore `~/data/<app>` and `~/.config/<app>.env` from backup.
 
 Step 5 is the only one that needs anything that isn't in version control. That

@@ -3,8 +3,11 @@
 # deploy-app.sh — clone or update an app on the Pi, build its image, and start
 # it under rootless podman + systemd.
 #
-#     ./deploy-app.sh whorl          # on the Pi
-#     ssh mypi 'bash -s' -- whorl < deploy-app.sh   # ...or over ssh
+#     ./deploy-app.sh whorl                                   # on the Pi
+#     cat apps/whorl.conf deploy-app.sh | ssh mypi 'bash -s -- whorl'   # remote
+#
+# The remote form prepends the config because the script cannot find
+# apps/<name>.conf when piped over stdin — $0 is not a path there.
 #
 # Idempotent. First run clones and starts; later runs pull, rebuild, restart.
 # Application state under ~/data/<app> is never touched.
@@ -16,6 +19,11 @@ set -euo pipefail
 
 APP="${1:-}"
 [ -n "$APP" ] || { echo "usage: $0 <app>"; exit 2; }
+
+# Run from somewhere every account can read. `sudo -u podsvc` inherits the
+# caller's working directory, and podman refuses to start if it cannot chdir
+# into it — which it can't, if you invoked this from the admin user's home.
+cd /tmp
 
 SERVICE_USER="podsvc"
 SVC_HOME=$(getent passwd "$SERVICE_USER" | cut -d: -f6)
