@@ -1,0 +1,3 @@
+apps/*.env
+*.local
+.DS_Store
