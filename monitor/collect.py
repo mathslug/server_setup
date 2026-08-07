@@ -315,12 +315,19 @@ def render(cur, hist):
 
     # "all apps answered" per sample, so the figure stays meaningful as apps
     # are added rather than silently tracking only the first one.
-    def all_ok(r):
-        a = r.get("apps") or {}
-        return bool(a) and all(v.get("http") == "200" for v in a.values())
-
-    ok_http = sum(1 for r in hist if all_ok(r))
-    pct = (100.0 * ok_http / len(hist)) if hist else 100.0
+    #
+    # Samples with no apps recorded are UNJUDGEABLE, not failures — they are
+    # left out of both halves of the ratio. Counting them as failures meant a
+    # schema change invented four outages that never happened and reported
+    # 50% uptime on a service that had not missed a check. A monitor that
+    # cries wolf about itself is worse than no monitor.
+    judged = [r for r in hist if (r.get("apps") or {})]
+    ok_http = sum(
+        1 for r in judged if all(v.get("http") == "200" for v in r["apps"].values())
+    )
+    n = len(judged)
+    pct = (100.0 * ok_http / n) if n else 100.0
+    skipped = len(hist) - n
 
     return f"""<!doctype html>
 <html lang="en"><head>
@@ -408,7 +415,7 @@ def render(cur, hist):
 </table>
 
 <footer>
-  All public URLs healthy on {ok_http} of {len(hist)} checks in the last 24h ({pct:.0f}%).
+  All public URLs healthy on {ok_http} of {n} checks in the last 24h ({pct:.0f}%){f', {skipped} older samples not comparable' if skipped else ''}.
   Sampled every {INTERVAL_S // 60} minutes; page refreshes itself every minute.
 </footer>
 </div></body></html>
@@ -417,9 +424,13 @@ def render(cur, hist):
 
 def summary(cur, hist):
     """Plain text, so switching to email or a push notification is a small change."""
-    ok = sum(1 for r in hist
-             if (r.get("apps") or {}) and
-             all(v.get("http") == "200" for v in r["apps"].values()))
+    # Same rule as the dashboard: unjudgeable samples leave the ratio entirely
+    # rather than counting against it.
+    judged = [r for r in hist if (r.get("apps") or {})]
+    ok = sum(
+        1 for r in judged if all(v.get("http") == "200" for v in r["apps"].values())
+    )
+    total = len(judged)
     return "\n".join([
         f"mypi health — {time.strftime('%Y-%m-%d %H:%M')}",
         f"  disk    {cur['disk']}% ({cur['disk_free_gb']} GB free)",
@@ -430,7 +441,7 @@ def summary(cur, hist):
           f"{a.get('cpu','—')} cpu, {a.get('mem','—')} ram, {a.get('disk','—')} disk"
           for n, a in sorted(cur.get("apps", {}).items())],
         f"  tunnel  {cur['tunnel']}",
-        f"  uptime24 {ok}/{len(hist)} samples all-green",
+        f"  uptime24 {ok}/{total} samples all-green",
         f"  uptime  {human_dt(cur['uptime'])}",
     ]) + "\n"
 
