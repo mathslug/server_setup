@@ -54,15 +54,46 @@ def apps():
     for conf in sorted((HERE / "apps").glob("*.conf")):
         name = conf.stem
         got = sh(
-            f'. "{conf}"; printf "%s\\n%s\\n%s\\n%s\\n%s" '
-            f'"$SERVICE" "$HOSTNAME" "$LOCAL_PORT" "$HEALTH_PATH" "$DATA_SUBDIR"'
+            f'. "{conf}"; printf "%s\\n%s\\n%s\\n%s\\n%s\\n%s" '
+            f'"$SERVICE" "$HOSTNAME" "$LOCAL_PORT" "$HEALTH_PATH" "$DATA_SUBDIR" '
+            f'"$JOB_RECEIPTS"'
         ).split("\n")
-        if len(got) == 5 and got[0]:
+        if len(got) >= 5 and got[0]:
             out.append({
                 "name": name, "service": got[0], "host": got[1],
                 "url": f"https://{got[1]}{got[3]}",
                 "data_dir": f"/home/podsvc/data/{got[4]}",
+                # "job:maxage job:maxage"; absent for apps with no scheduled work.
+                "jobs": got[5] if len(got) > 5 else "",
             })
+    return out
+
+
+JOBS_DIR = Path("/var/lib/rpi-health/jobs")
+_DUR = {"m": 60, "h": 3600, "d": 86400}
+
+
+def job_ages(app, spec):
+    """{job: seconds since its last clean run, or None} for one app's jobs.
+
+    Reads the receipts the jobs write themselves rather than asking systemd.
+    systemd is the tempting source and the wrong one: a unit that has never run
+    reports Result=success with no timestamp, and user unit state resets on
+    reboot — so on a machine designed to survive power cuts, every cut would
+    erase the evidence and then claim success.
+    """
+    out = {}
+    for item in (spec or "").split():
+        job, _, limit = item.partition(":")
+        try:
+            secs = int(limit[:-1]) * _DUR[limit[-1]]
+        except (ValueError, KeyError, IndexError):
+            secs = 26 * 3600
+        try:
+            age = int(time.time()) - int((JOBS_DIR / f"{app}.{job}").read_text().split()[0])
+        except (OSError, ValueError, IndexError):
+            age = None
+        out[job] = {"age": age, "limit": secs}
     return out
 
 # Thresholds. Deliberately generous — a dashboard that cries wolf gets ignored.
@@ -87,6 +118,20 @@ def human_bytes(v):
         if n < 1024 or unit == "GB":
             return f"{n:.0f}{unit}" if unit in ("B", "KB") else f"{n:.1f}{unit}"
         n /= 1024
+
+
+def job_state(j):
+    """good / warning / critical for one job's staleness.
+
+    Two thresholds rather than one, for the same reason the backup row has two:
+    a single missed run is usually a slow night, while two in a row is a job
+    that has stopped working. Warning at the limit, critical at twice it.
+    """
+    if j["age"] is None:
+        return "warning"          # not yet run, or the receipt predates this feature
+    if j["age"] < j["limit"]:
+        return "good"
+    return "warning" if j["age"] < 2 * j["limit"] else "critical"
 
 
 def backup_age():
@@ -193,6 +238,7 @@ def sample():
             "mem": st.get("mem", "—"),
             "mem_pct": st.get("mem_pct", "—"),
             "disk": human_bytes(disk_b),
+            "jobs": job_ages(a["name"], a.get("jobs", "")),
         }
 
     return {
@@ -299,6 +345,13 @@ def render(cur, hist):
         "good" if (a["unit"] == "active" and a["http"] == "200") else "critical"
         for a in cur.get("apps", {}).values()
     ] + [
+        # Scheduled work counts toward the headline too. An app that serves
+        # perfectly while its jobs have stopped is broken in the way that
+        # matters, and was previously indistinguishable from a healthy one.
+        job_state(j)
+        for a in cur.get("apps", {}).values()
+        for j in (a.get("jobs") or {}).values()
+    ] + [
         # A stale backup counts toward the headline. A row nobody scrolls to is
         # only marginally better than a log nobody opens.
         "good" if (cur.get("backup_age") is not None
@@ -343,6 +396,12 @@ def render(cur, hist):
                  f"{a.get('mem','—')} RAM ({a.get('mem_pct','—')} of cap) · "
                  f"{a.get('disk','—')} disk")
         app_rows.append(row(name, f"{a['unit']} · HTTP {a['http']}", usage, st))
+        for job, j in sorted(a.get("jobs", {}).items()):
+            jst = job_state(j)
+            val = f"{human_dt(j['age'])} ago" if j["age"] is not None else "no clean run recorded"
+            app_rows.append(row(
+                f"&nbsp;&nbsp;{name} · {job}", val,
+                f"expected every {human_dt(j['limit'])} or so", jst))
 
     # NOT `age` — that name is already the dashboard's own data age above, and
     # the HTML template below renders "Updated {human_dt(age)} ago" from it.
@@ -491,9 +550,16 @@ def summary(cur, hist):
         f"  memory  {cur['mem']}% ({cur['mem_mb']}/{cur['mem_total_mb']} MB)",
         f"  temp    {cur['temp']}C   throttled={cur['throttled']}",
         f"  load    {cur['load']}",
-        *[f"  {n:<7} {a['unit']}, HTTP {a['http']}, "
-          f"{a.get('cpu','—')} cpu, {a.get('mem','—')} ram, {a.get('disk','—')} disk"
-          for n, a in sorted(cur.get("apps", {}).items())],
+        *[line
+          for n, a in sorted(cur.get("apps", {}).items())
+          for line in [
+              f"  {n:<7} {a['unit']}, HTTP {a['http']}, "
+              f"{a.get('cpu','—')} cpu, {a.get('mem','—')} ram, {a.get('disk','—')} disk",
+              *[f"    {n}.{job:<7} "
+                f"{human_dt(j['age']) + ' ago' if j['age'] is not None else 'NO CLEAN RUN'}"
+                f"{'' if job_state(j) == 'good' else '   <-- ' + job_state(j).upper()}"
+                for job, j in sorted((a.get("jobs") or {}).items())],
+          ]],
         f"  tunnel  {cur['tunnel']}",
         f"  backup  {human_dt(cur['backup_age']) + ' ago' if cur.get('backup_age') is not None else 'NEVER'}",
         f"  uptime24 {ok}/{total} samples all-green",

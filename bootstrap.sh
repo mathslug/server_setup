@@ -161,7 +161,10 @@ ok "layout: ${SVC_HOME}/{apps,data,.config/containers/systemd}"
 # would vanish on every reboot and read as "never backed up" — a false alarm
 # that would train you to ignore the row.
 sudo install -d -m 0755 /var/lib/rpi-health
-ok "state: /var/lib/rpi-health (backup receipt)"
+# Job receipts are written by the apps' own scheduled jobs, which run as the
+# service account, so this one it must own.
+sudo install -d -m 0755 -o "$SERVICE_USER" -g "$SERVICE_USER" /var/lib/rpi-health/jobs
+ok "state: /var/lib/rpi-health (backup receipt, job receipts)"
 
 # ---------------------------------------------------------------------------
 say "SSH known_hosts for github.com"
