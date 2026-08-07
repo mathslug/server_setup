@@ -36,10 +36,10 @@ STAMP=$(date +%Y-%m-%d_%H%M%S)
 RUN="${DEST}/daily/${STAMP}"
 LATEST="${DEST}/latest"
 
-# Apps to back up: name:remote_data_dir:env_file
-APPS=(
-  "whorl:/home/podsvc/data/whorl:/home/podsvc/.config/whorl.env"
-)
+# Apps are discovered from apps/*.conf rather than listed here, so a new app
+# is backed up the moment its config exists — no second place to remember.
+# shellcheck disable=SC1091
+. "${REPO_ROOT}/lib/appconf.sh"
 
 log() { printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 fail() { log "FAILED: $*"; exit 1; }
@@ -51,8 +51,8 @@ log "=== backup run ${STAMP} ==="
 ssh -o ConnectTimeout=15 -o BatchMode=yes "$PI" true 2>/dev/null \
   || fail "cannot reach ${PI} over ssh"
 
-for entry in "${APPS[@]}"; do
-  IFS=: read -r APP DATA_DIR ENV_FILE <<<"$entry"
+for APP in $(appconf_list); do
+  appconf_load "$APP"
   log "--- ${APP} ---"
   mkdir -p "${RUN}/${APP}"
 

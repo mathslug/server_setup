@@ -20,21 +20,17 @@ APP="${1:-}"
 
 cd /tmp   # sudo -u inherits the caller's cwd; podman fails if it can't chdir
 
-HERE="$(dirname "$(readlink -f "$0")")"
-CONF="${HERE}/apps/${APP}.conf"
-[ -f "$CONF" ] || { echo "no config: $CONF"; exit 2; }
-# shellcheck disable=SC1090
-. "$CONF"
-
-SERVICE_USER="podsvc"
-CHECKOUT="$(getent passwd "$SERVICE_USER" | cut -d: -f6)/apps/${APP}"
+HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+# shellcheck disable=SC1091
+. "${HERE}/lib/appconf.sh"
+appconf_load "$APP"
 
 if [ ! -d "${CHECKOUT}/.git" ]; then
   echo "${APP}: not deployed yet (${CHECKOUT} missing) — run deploy-app.sh first"
   exit 0
 fi
 
-asuser() { sudo -u "$SERVICE_USER" env HOME="$(getent passwd "$SERVICE_USER" | cut -d: -f6)" "$@"; }
+asuser() { sudo -u "$SERVICE_USER" env HOME="$SVC_HOME" "$@"; }
 
 DEPLOYED=$(asuser git -C "$CHECKOUT" rev-parse HEAD)
 REMOTE=$(asuser git -C "$CHECKOUT" ls-remote origin "refs/heads/${BRANCH}" | cut -f1)

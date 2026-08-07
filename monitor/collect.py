@@ -29,7 +29,30 @@ SAMPLES = ROOT / "samples.tsv"
 WWW = ROOT / "www"
 INTERVAL_S = 300
 WINDOW_S = 24 * 3600
-PUBLIC_URL = "https://whorl.mathslug.com/healthz"
+HERE = Path(__file__).resolve().parent.parent
+
+
+def apps():
+    """Discover apps from apps/*.conf — the same source of truth the deploy and
+    backup scripts use, so a new app appears on the dashboard automatically.
+
+    The confs are shell, so they are read by sourcing them in a subshell rather
+    than parsed here: that handles quoting and the multi-line ENV_TEMPLATE
+    correctly instead of approximately.
+    """
+    out = []
+    for conf in sorted((HERE / "apps").glob("*.conf")):
+        name = conf.stem
+        got = sh(
+            f'. "{conf}"; printf "%s\\n%s\\n%s\\n%s" '
+            f'"$SERVICE" "$HOSTNAME" "$LOCAL_PORT" "$HEALTH_PATH"'
+        ).split("\n")
+        if len(got) == 4 and got[0]:
+            out.append({
+                "name": name, "service": got[0], "host": got[1],
+                "url": f"https://{got[1]}{got[3]}",
+            })
+    return out
 
 # Thresholds. Deliberately generous — a dashboard that cries wolf gets ignored.
 LIMITS = {"disk": (80, 90), "mem": (85, 95), "temp": (70, 80), "load": (3.0, 6.0)}
@@ -73,16 +96,22 @@ def sample():
     # The single most common way a Pi misbehaves, and invisible without this.
     throttled = sh("vcgencmd get_throttled").replace("throttled=", "") or "0x0"
 
-    whorl = sh(
-        "sudo -u podsvc env XDG_RUNTIME_DIR=/run/user/1001 "
-        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus "
-        "systemctl --user is-active whorl.service"
-    )
     tunnel = sh("systemctl is-active cloudflared")
 
-    # Fetching our own PUBLIC url exercises DNS -> Cloudflare -> tunnel -> app.
-    # A purely local check would call a silently dead tunnel healthy.
-    http = sh(f"curl -s -o /dev/null -w '%{{http_code}}' --max-time 10 {PUBLIC_URL}")
+    # Per app: is its unit up, and does its PUBLIC url answer? Fetching the
+    # public url exercises DNS -> Cloudflare -> tunnel -> app; a purely local
+    # check would call a silently dead tunnel healthy.
+    app_state = {}
+    for a in apps():
+        unit = sh(
+            "sudo -u podsvc env XDG_RUNTIME_DIR=/run/user/1001 "
+            "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus "
+            f"systemctl --user is-active {a['service']}.service"
+        )
+        code = sh(
+            f"curl -s -o /dev/null -w '%{{http_code}}' --max-time 10 {a['url']}"
+        )
+        app_state[a["name"]] = {"unit": unit or "unknown", "http": code or "000"}
 
     return {
         "t": int(time.time()),
@@ -91,9 +120,8 @@ def sample():
         "load": round(load, 2),
         "temp": round(temp, 1),
         "throttled": throttled,
-        "whorl": whorl or "unknown",
         "tunnel": tunnel or "unknown",
-        "http": http or "000",
+        "apps": app_state,
         "uptime": int(uptime),
         "mem_mb": round((mem_total - mem_avail) / 1024),
         "mem_total_mb": round(mem_total / 1024),
@@ -182,10 +210,11 @@ def render(cur, hist):
         state("mem", cur["mem"]),
         state("temp", cur["temp"]),
         state("load", cur["load"]),
-        "good" if cur["whorl"] == "active" else "critical",
         "good" if cur["tunnel"] == "active" else "critical",
-        "good" if cur["http"] == "200" else "critical",
         "good" if cur["throttled"] == "0x0" else "warning",
+    ] + [
+        "good" if (a["unit"] == "active" and a["http"] == "200") else "critical"
+        for a in cur.get("apps", {}).values()
     ]
     overall = (
         "critical" if "critical" in checks
@@ -216,18 +245,27 @@ def render(cur, hist):
              state("load", cur["load"]), series("load")),
     ])
 
-    rows = "\n".join([
-        row("whorl", cur["whorl"], "container", "good" if cur["whorl"] == "active" else "critical"),
+    app_rows = []
+    for name, a in sorted(cur.get("apps", {}).items()):
+        st = "good" if (a["unit"] == "active" and a["http"] == "200") else "critical"
+        app_rows.append(row(name, f"{a['unit']} · HTTP {a['http']}",
+                            "container + public URL", st))
+
+    rows = "\n".join(app_rows + [
         row("cloudflared", cur["tunnel"], "tunnel", "good" if cur["tunnel"] == "active" else "critical"),
-        row("Public URL", f"HTTP {cur['http']}", "whorl.mathslug.com via Cloudflare",
-            "good" if cur["http"] == "200" else "critical"),
         row("Power / thermal", cur["throttled"],
             "0x0 is healthy; anything else means undervoltage or throttling",
             "good" if cur["throttled"] == "0x0" else "warning"),
         row("Uptime", human_dt(cur["uptime"]), "since last boot", "good"),
     ])
 
-    ok_http = sum(1 for r in hist if r.get("http") == "200")
+    # "all apps answered" per sample, so the figure stays meaningful as apps
+    # are added rather than silently tracking only the first one.
+    def all_ok(r):
+        a = r.get("apps") or {}
+        return bool(a) and all(v.get("http") == "200" for v in a.values())
+
+    ok_http = sum(1 for r in hist if all_ok(r))
     pct = (100.0 * ok_http / len(hist)) if hist else 100.0
 
     return f"""<!doctype html>
@@ -316,7 +354,7 @@ def render(cur, hist):
 </table>
 
 <footer>
-  Public URL healthy on {ok_http} of {len(hist)} checks in the last 24h ({pct:.0f}%).
+  All public URLs healthy on {ok_http} of {len(hist)} checks in the last 24h ({pct:.0f}%).
   Sampled every {INTERVAL_S // 60} minutes; page refreshes itself every minute.
 </footer>
 </div></body></html>
@@ -325,16 +363,19 @@ def render(cur, hist):
 
 def summary(cur, hist):
     """Plain text, so switching to email or a push notification is a small change."""
-    ok = sum(1 for r in hist if r.get("http") == "200")
+    ok = sum(1 for r in hist
+             if (r.get("apps") or {}) and
+             all(v.get("http") == "200" for v in r["apps"].values()))
     return "\n".join([
         f"mypi health — {time.strftime('%Y-%m-%d %H:%M')}",
         f"  disk    {cur['disk']}% ({cur['disk_free_gb']} GB free)",
         f"  memory  {cur['mem']}% ({cur['mem_mb']}/{cur['mem_total_mb']} MB)",
         f"  temp    {cur['temp']}C   throttled={cur['throttled']}",
         f"  load    {cur['load']}",
-        f"  whorl   {cur['whorl']}",
+        *[f"  {n:<7} {a['unit']}, HTTP {a['http']}"
+          for n, a in sorted(cur.get("apps", {}).items())],
         f"  tunnel  {cur['tunnel']}",
-        f"  public  HTTP {cur['http']}  ({ok}/{len(hist)} ok in 24h)",
+        f"  uptime24 {ok}/{len(hist)} samples all-green",
         f"  uptime  {human_dt(cur['uptime'])}",
     ]) + "\n"
 

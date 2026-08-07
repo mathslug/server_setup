@@ -16,4 +16,9 @@ Wants=network-online.target
 Type=oneshot
 ExecStart=/usr/bin/git -C /opt/rpi fetch --quiet origin main
 ExecStart=/usr/bin/git -C /opt/rpi reset --quiet --hard origin/main
+# Regenerate the tunnel ingress from apps/*.conf and reload if it changed.
+# Without this the deployed /etc/cloudflared/config.yml drifts from the repo
+# the first time an app is added, silently and without error. The script
+# validates before reloading, and is a no-op when nothing changed.
+ExecStart=/opt/rpi/cloudflared/render-config.sh
 TimeoutStartSec=5min

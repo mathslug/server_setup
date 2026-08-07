@@ -1,19 +1,13 @@
 #!/usr/bin/env bash
 #
-# deploy-app.sh — clone or update an app on the Pi, build its image, and start
-# it under rootless podman + systemd.
+# deploy-app.sh — clone or update an app, build its image, and start it under
+# rootless podman + systemd.
 #
-#     ./deploy-app.sh whorl                                   # on the Pi
-#     cat apps/whorl.conf deploy-app.sh | ssh mypi 'bash -s -- whorl'   # remote
-#
-# The remote form prepends the config because the script cannot find
-# apps/<name>.conf when piped over stdin — $0 is not a path there.
+#     /opt/rpi/deploy-app.sh whorl
 #
 # Idempotent. First run clones and starts; later runs pull, rebuild, restart.
-# Application state under ~/data/<app> is never touched.
-#
-# Config comes from apps/<name>.conf, which is expected next to this script.
-# When piping over ssh, the config is inlined by run.sh instead.
+# Application state under ~/data/<app> is never touched, so a redeploy cannot
+# destroy anything that isn't in git.
 
 set -euo pipefail
 
@@ -25,14 +19,16 @@ APP="${1:-}"
 # into it — which it can't, if you invoked this from the admin user's home.
 cd /tmp
 
-SERVICE_USER="podsvc"
-SVC_HOME=$(getent passwd "$SERVICE_USER" | cut -d: -f6)
+HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+# shellcheck disable=SC1091
+. "${HERE}/lib/appconf.sh"
+appconf_load "$APP"
+
 SVC_UID=$(id -u "$SERVICE_USER")
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 ok()  { printf '   %s\n' "$*"; }
 
-# Run a command as the service account with a usable systemd user session.
 # XDG_RUNTIME_DIR is what makes `systemctl --user` and podman find the right
 # socket; without it both fail in confusing ways.
 asuser() {
@@ -42,20 +38,6 @@ asuser() {
     DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${SVC_UID}/bus" \
     "$@"
 }
-
-CONF="$(dirname "$0")/apps/${APP}.conf"
-if [ -f "$CONF" ]; then
-  # shellcheck disable=SC1090
-  . "$CONF"
-elif [ -n "${REPO:-}" ]; then
-  ok "using inlined config"
-else
-  echo "no config: $CONF"; exit 2
-fi
-
-CHECKOUT="${SVC_HOME}/apps/${APP}"
-DATA_DIR="${SVC_HOME}/data/${DATA_SUBDIR}"
-ENV_FILE="${SVC_HOME}/.config/${APP}.env"
 
 # ---------------------------------------------------------------------------
 say "Source: ${REPO}"
@@ -86,8 +68,9 @@ fi
 # ---------------------------------------------------------------------------
 say "Build ${IMAGE}:latest"
 # ---------------------------------------------------------------------------
-# Built natively on the Pi so architecture-specific dependencies (sharp,
-# better-sqlite3, esbuild) resolve to arm64 binaries.
+# Built natively on the target so architecture-specific dependencies (sharp,
+# better-sqlite3, esbuild) resolve for the host it will actually run on. This
+# is also what makes moving an app to an x86 droplet a non-event.
 asuser podman build --quiet -t "${IMAGE}:latest" "$CHECKOUT" >/dev/null
 ok "built $(asuser podman image inspect "${IMAGE}:latest" --format '{{.Id}}' | cut -c1-12)"
 
