@@ -225,8 +225,9 @@ Afterwards, delete the orphaned tunnel: `cloudflared tunnel delete mypi`.
 ## What is NOT recoverable
 
 Anything written since the last backup — up to 24 hours of posts, comments,
-uploaded images, and scan results. The backup runs daily at 12:30 and only when
-the Mac is awake and on the same network as the Pi.
+uploaded images, and scan results. The backup runs daily at 06:00, and needs
+the Mac awake and able to reach the Pi — over the LAN, or through the Cloudflare
+tunnel if a valid Access session exists.
 
 For karb specifically that is a day of prices and evaluations, which the next
 scan largely re-derives from Kalshi. The irreplaceable part is your **human

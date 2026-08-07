@@ -72,7 +72,7 @@ log "=== backup run ${STAMP} ==="
 #
 # Bounded with `timeout`, not just ConnectTimeout: if the Access token has
 # expired, `cloudflared access ssh` waits for a browser login that nobody is
-# there to complete, and this runs unattended from launchd at 12:30.
+# there to complete, and this runs unattended from launchd at 06:00.
 TIMEOUT_BIN=$(command -v timeout || command -v gtimeout || true)
 try_host() {
   if [ -n "$TIMEOUT_BIN" ]; then
