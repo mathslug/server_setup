@@ -110,13 +110,22 @@ def sample():
         "podman stats --no-stream --format "
         "'{{.Name}}\t{{.CPU}}\t{{.MemUsage}}\t{{.MemPerc}}'"
     )
+    def pct(v):
+        # podman emits CPU as a bare float with full precision
+        # ("0.9897660795695922"), which is unreadable in a UI.
+        v = v.strip().rstrip("%")
+        try:
+            return f"{float(v):.1f}%"
+        except ValueError:
+            return "\u2014"
+
     for line in raw.splitlines():
         parts = line.split("\t")
         if len(parts) == 4:
             stats[parts[0]] = {
-                "cpu": parts[1].strip(),
+                "cpu": pct(parts[1]),
                 "mem": parts[2].split("/")[0].strip(),
-                "mem_pct": parts[3].strip(),
+                "mem_pct": pct(parts[3]),
             }
 
     app_state = {}
