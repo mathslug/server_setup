@@ -1,0 +1,32 @@
+# Serves the generated dashboard on the LAN.
+#
+# Installed to ~/.config/containers/systemd/dashboard.container for the podsvc
+# user, alongside the app containers.
+#
+# Unlike the apps, this binds 0.0.0.0 rather than loopback — the whole point is
+# reaching it from a phone on the same network. It is NOT routed through the
+# Cloudflare tunnel, so it is not reachable from the internet. If you ever want
+# it remotely, add an ingress rule and put Cloudflare Access in front; do not
+# simply expose it.
+#
+# Read-only mount: this container serves files and has no business writing any.
+
+[Unit]
+Description=mypi health dashboard (LAN only)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+ContainerName=dashboard
+Image=docker.io/library/busybox:stable
+PublishPort=8080:8080
+Volume=/run/rpi-health/www:/www:ro
+Exec=httpd -f -p 8080 -h /www
+PodmanArgs=--memory=64m
+
+[Service]
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

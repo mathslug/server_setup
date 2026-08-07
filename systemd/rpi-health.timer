@@ -1,0 +1,12 @@
+[Unit]
+Description=Sample Pi health every 5 minutes
+
+[Timer]
+# Soon after boot, so the dashboard isn't blank if you check right after a
+# power cut — which is exactly when you would.
+OnBootSec=90s
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,16 @@
+[Unit]
+Description=Sample Pi health and render the dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Runs as root: needs vcgencmd, and `sudo -u podsvc` to query the rootless
+# user units. Everything it writes goes to /run (tmpfs), never the SD card.
+ExecStart=/usr/bin/python3 /opt/rpi/monitor/collect.py
+TimeoutStartSec=2min
+
+# The public-URL probe is the slow part and can hang on a dead network.
+# Failing is fine — the next run in 5 minutes tries again, and a gap in the
+# history is itself a signal.
+SuccessExitStatus=0
