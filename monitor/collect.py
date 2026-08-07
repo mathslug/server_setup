@@ -324,9 +324,15 @@ def tile(label, value, unit, sub, st, values):
     </div>"""
 
 
-def row(label, ok, detail, st):
+def row(label, ok, detail, st, sub=False):
+    """sub=True indents the label, for a job listed under the app that owns it.
+
+    A CSS class rather than &nbsp; padding: the label goes through an f-string
+    that does not escape, so entities happen to survive today, and would stop
+    silently the moment anything sensible was added there.
+    """
     return f"""      <tr>
-        <th scope="row">{label}</th>
+        <th scope="row"{' class="sub"' if sub else ''}>{label}</th>
         <td><span class="dot {st}">{ICON[st]}</span> <span class="state">{ok}</span></td>
         <td class="muted">{detail}</td>
       </tr>"""
@@ -400,8 +406,8 @@ def render(cur, hist):
             jst = job_state(j)
             val = f"{human_dt(j['age'])} ago" if j["age"] is not None else "no clean run recorded"
             app_rows.append(row(
-                f"&nbsp;&nbsp;{name} · {job}", val,
-                f"expected every {human_dt(j['limit'])} or so", jst))
+                f"{name} · {job}", val,
+                f"expected every {human_dt(j['limit'])} or so", jst, sub=True))
 
     # NOT `age` — that name is already the dashboard's own data age above, and
     # the HTML template below renders "Updated {human_dt(age)} ago" from it.
@@ -504,6 +510,7 @@ def render(cur, hist):
            border-bottom:1px solid var(--grid); font-weight:400; }}
   tr:last-child th, tr:last-child td {{ border-bottom:none; }}
   th[scope=row] {{ color:var(--text-secondary); width:36%; }}
+  th.sub {{ padding-left:32px; color:var(--muted); font-size:13px; }}
   .state {{ font-variant-numeric:tabular-nums; }}
   .muted {{ color:var(--muted); font-size:13px; }}
   footer {{ margin-top:18px; font-size:13px; color:var(--muted); }}
