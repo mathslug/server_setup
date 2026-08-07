@@ -20,6 +20,10 @@ cloudflared/        tunnel ingress + hardened systemd unit
 systemd/            system units, and install-units.sh which keeps
                     /etc/systemd/system in step with this directory
 PLAN.md             the migration this is part of, and why
+TODO.md             what is left, and what was decided against
+RECOVERY.md         rebuilding from a dead SD card
+SIMPLIFY.md         replacing hand-rolled parts with maintained ones,
+                    and an honest account of where that is not worth it
 ```
 
 ## Adding an app
