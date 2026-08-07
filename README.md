@@ -64,6 +64,46 @@ died. Non-zero `max` with zero `oom_kill` is the quiet case worth catching.
 while hitting its ceiling 852 times, because the page cache it kept losing was
 never counted in that number.
 
+## Reaching the Pi from outside the LAN
+
+Two hostnames go through the tunnel to the Pi itself rather than to an app, and
+both sit behind Cloudflare Access with an email one-time-PIN policy:
+
+```
+mypi.mathslug.com    health dashboard   -> http://127.0.0.1:8080
+ssh.mathslug.com     ssh                -> ssh://localhost:22
+```
+
+They are declared in `cloudflared/host-ingress.conf`, which `render-config.sh`
+folds into the generated tunnel config. **Neither authenticates on its own** —
+the dashboard has no login at all — so the Access policy is the only thing in
+front of it. Create the Access application first, add the ingress line second,
+and the DNS record last; a line here is inert until DNS exists, which is what
+makes that order safe.
+
+The dashboard is still bound to the LAN on `:8080`, so at home it is reachable
+directly without a Cloudflare round trip.
+
+SSH uses two aliases deliberately (see `~/.ssh/config`):
+
+```
+ssh mypi           LAN, direct — the default; works when the internet doesn't
+ssh mypi-remote    through the tunnel and Access, from anywhere
+```
+
+`mypi-remote` shares the LAN alias's recorded host key via `HostKeyAlias`, so
+there is one trusted key for the machine rather than two that could disagree.
+The SSH key is still required — Access is in front of sshd, not instead of it.
+
+First use needs a browser: `cloudflared access login https://ssh.mathslug.com`.
+
+**The cached token lasts exactly as long as the Access application's session
+duration — currently 24 hours.** That matters because `pull-backups.sh` falls
+back to `mypi-remote` when the LAN is unavailable: off-LAN backups work for a
+day after an interactive login, then fail (loudly — the run exits non-zero).
+Making that genuinely unattended needs an Access *service token*, which is in
+TODO.md and is not set up yet.
+
 ## Automatic deploys
 
 GitHub Actions cannot reach the Pi — the tunnel only carries inbound traffic

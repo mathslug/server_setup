@@ -32,7 +32,8 @@
 
 set -euo pipefail
 
-PI="${PI_HOST:-mypi}"
+# Chosen at runtime — see the reachability check below. Set PI_HOST to force one.
+PI="${PI_HOST:-}"
 # Default to backups/ inside this repo, resolved relative to the script so it
 # survives the repo being moved. Git-ignored; Time Machine covers it.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -63,8 +64,33 @@ mkdir -p "${DEST}/daily" "${DEST}/weekly"
 
 log "=== backup run ${STAMP} ==="
 
-ssh -o ConnectTimeout=15 -o BatchMode=yes "$PI" true 2>/dev/null \
-  || fail "cannot reach ${PI} over ssh"
+# LAN first, Cloudflare tunnel second.
+#
+# The LAN path is direct and works when the internet does not, so it stays the
+# default. The tunnel is why "the Mac was not at home" no longer means "no
+# backup today", which was the largest remaining hole in this arrangement.
+#
+# Bounded with `timeout`, not just ConnectTimeout: if the Access token has
+# expired, `cloudflared access ssh` waits for a browser login that nobody is
+# there to complete, and this runs unattended from launchd at 12:30.
+TIMEOUT_BIN=$(command -v timeout || command -v gtimeout || true)
+try_host() {
+  if [ -n "$TIMEOUT_BIN" ]; then
+    "$TIMEOUT_BIN" 30 ssh -o ConnectTimeout=10 -o BatchMode=yes "$1" true 2>/dev/null
+  else
+    ssh -o ConnectTimeout=10 -o BatchMode=yes "$1" true 2>/dev/null
+  fi
+}
+
+if [ -n "$PI" ]; then
+  try_host "$PI" || fail "cannot reach ${PI} over ssh"
+else
+  for CANDIDATE in mypi mypi-remote; do
+    if try_host "$CANDIDATE"; then PI="$CANDIDATE"; break; fi
+  done
+  [ -n "$PI" ] || fail "cannot reach the Pi on the LAN (mypi) or the tunnel (mypi-remote)"
+fi
+log "reaching the Pi as '${PI}'"
 
 backup_app() {
   local APP="$1"
