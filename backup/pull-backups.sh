@@ -25,7 +25,10 @@
 set -euo pipefail
 
 PI="${PI_HOST:-mypi}"
-DEST="${BACKUP_DEST:-$HOME/pi-backups}"
+# Default to backups/ inside this repo, resolved relative to the script so it
+# survives the repo being moved. Git-ignored; Time Machine covers it.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DEST="${BACKUP_DEST:-${REPO_ROOT}/backups}"
 KEEP_DAILY=14
 KEEP_WEEKLY=8
 

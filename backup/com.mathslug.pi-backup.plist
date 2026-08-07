@@ -34,9 +34,9 @@
     <false/>
 
     <key>StandardOutPath</key>
-    <string>/Users/johnbentley/pi-backups/backup.log</string>
+    <string>/Users/johnbentley/src/rpi/backups/backup.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/johnbentley/pi-backups/backup.log</string>
+    <string>/Users/johnbentley/src/rpi/backups/backup.log</string>
 
     <!-- ssh needs a PATH that includes the usual locations; launchd's default
          is minimal. -->
