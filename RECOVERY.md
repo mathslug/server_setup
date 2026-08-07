@@ -92,16 +92,31 @@ DNS needs no change — the CNAME still points at the same tunnel UUID.
 ## 6. Redeploy the apps
 
 ```
-cat apps/whorl.conf deploy-app.sh | ssh mypi 'bash -s -- whorl'
+ssh mypi 'sudo /opt/rpi/deploy-app.sh whorl'
+ssh mypi 'sudo /opt/rpi/deploy-app.sh karb'
 ```
 
-Clones, builds for the local architecture, installs the Quadlet unit, starts,
-health-checks. Creates `whorl.env` from the template — the real one comes next.
+Clones, builds for the local architecture, installs the Quadlet unit and any
+timers the app ships, starts, health-checks. Creates `<app>.env` from the
+template — the real values come next.
+
+whorl's repo is private, so its first run generates `~/.ssh/id_ed25519_whorl`,
+prints it, and stops. Add it at the URL it gives you and run again. karb's repo
+is public and clones over https with no key. **One key per app** — GitHub will
+not accept the same public key as a deploy key on two repositories.
+
+karb's build takes several minutes on a Pi and runs the test suite as part of
+the build; a failing suite fails the build by design.
 
 ## 7. Restore application state
 
+Snapshots are gzipped. Both databases are WAL-mode SQLite, and both were taken
+with `VACUUM INTO`, so they are already consistent — there is no WAL to replay
+and no repair step.
+
 ```
-scp backups/latest/whorl/app.db mypi:/tmp/
+# --- whorl ---
+scp backups/latest/whorl/app.db.gz mypi:/tmp/
 scp -r backups/latest/whorl/images mypi:/tmp/
 scp backups/latest/whorl/env mypi:/tmp/whorl.env
 
@@ -112,14 +127,34 @@ ssh mypi 'cd /tmp && sudo sh -c "
   # Remove any WAL belonging to the freshly-created empty database, or SQLite
   # will try to replay it against the restored file.
   rm -f \$D/app.db \$D/app.db-wal \$D/app.db-shm
-  install -o podsvc -g podsvc -m 0644 /tmp/app.db \$D/app.db
+  gunzip -c /tmp/app.db.gz > \$D/app.db
   cp /tmp/images/* \$D/images/ 2>/dev/null || true
   install -o podsvc -g podsvc -m 0600 /tmp/whorl.env /home/podsvc/.config/whorl.env
   chown -R podsvc:podsvc \$D
-  rm -rf /tmp/app.db /tmp/images /tmp/whorl.env
+  rm -rf /tmp/app.db.gz /tmp/images /tmp/whorl.env
   \$U systemctl --user start whorl.service
 "'
+
+# --- karb --- (~700MB uncompressed; the gunzip takes a minute)
+scp backups/latest/karb/slonk_arb.db.gz mypi:/tmp/
+scp backups/latest/karb/env mypi:/tmp/karb.env
+
+ssh mypi 'cd /tmp && sudo sh -c "
+  U=\"sudo -u podsvc env HOME=/home/podsvc XDG_RUNTIME_DIR=/run/user/1001 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus\"
+  \$U systemctl --user stop karb.service
+  D=/home/podsvc/data/karb
+  rm -f \$D/slonk_arb.db \$D/slonk_arb.db-wal \$D/slonk_arb.db-shm
+  gunzip -c /tmp/slonk_arb.db.gz > \$D/slonk_arb.db
+  install -o podsvc -g podsvc -m 0600 /tmp/karb.env /home/podsvc/.config/karb.env
+  chown -R podsvc:podsvc \$D
+  rm -f /tmp/slonk_arb.db.gz /tmp/karb.env
+  \$U systemctl --user start karb.service
+"'
 ```
+
+The first request to karb after a restore is slow — up to a minute. `db.py`
+re-runs its migrations on every connection, one of which touches all 610k rows
+of `tickers`, and the page cache is cold. It is fast on every request after.
 
 ## 8. Timers
 
@@ -144,11 +179,28 @@ nothing to do for them here.
 
 ```
 curl -s -o /dev/null -w "%{http_code}\n" https://whorl.mathslug.com/healthz   # 200
+curl -s -o /dev/null -w "%{http_code}\n" https://karb.mathslug.com/healthz    # 200
+ssh mypi 'sudo systemctl start rpi-health.service; sudo cat /run/rpi-health/summary.txt'
 ./backup/pull-backups.sh                                                      # counts match
 ```
 
 Check the row counts in the backup output against what you expect. If posts
 came back as 0, you restored an empty database — see the WAL note in step 7.
+
+karb's scheduled jobs are user timers installed by `deploy-app.sh`. Confirm all
+four are armed, and that the times are the UTC ones (03:30/04:00 EDT, not
+07:30/08:00 local — an unsuffixed `OnCalendar` would silently shift them):
+
+```
+ssh mypi 'cd /tmp && sudo -u podsvc env HOME=/home/podsvc XDG_RUNTIME_DIR=/run/user/1001 \
+  systemctl --user list-timers "karb-job@*" --no-pager'
+```
+
+Their output goes to the journal, not to log files. To read it:
+
+```
+ssh mypi 'sudo journalctl _UID=1001 -n 50 --no-pager'
+```
 
 ---
 
@@ -172,6 +224,10 @@ Afterwards, delete the orphaned tunnel: `cloudflared tunnel delete mypi`.
 
 ## What is NOT recoverable
 
-Anything written since the last backup — up to 24 hours of posts, comments and
-uploaded images. The backup runs daily at 12:30 and only when the Mac is awake
-and on the same network as the Pi.
+Anything written since the last backup — up to 24 hours of posts, comments,
+uploaded images, and scan results. The backup runs daily at 12:30 and only when
+the Mac is awake and on the same network as the Pi.
+
+For karb specifically that is a day of prices and evaluations, which the next
+scan largely re-derives from Kalshi. The irreplaceable part is your **human
+review decisions** in `candidate_pairs` — those exist nowhere else.
