@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Daily pull of the Pi's application state onto this Mac.
+
+  Install:
+    cp backup/com.mathslug.pi-backup.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.mathslug.pi-backup.plist
+
+  Run once now:
+    launchctl kickstart -k gui/$UID/com.mathslug.pi-backup
+
+  If the Mac is asleep at the scheduled time, launchd runs the job when it
+  next wakes rather than skipping the day. RunAtLoad is deliberately off, so
+  logging in repeatedly doesn't pile up snapshots.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mathslug.pi-backup</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/johnbentley/src/rpi/backup/pull-backups.sh</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>12</integer>
+        <key>Minute</key><integer>30</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/johnbentley/pi-backups/backup.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/johnbentley/pi-backups/backup.log</string>
+
+    <!-- ssh needs a PATH that includes the usual locations; launchd's default
+         is minimal. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
