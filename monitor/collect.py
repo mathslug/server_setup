@@ -106,7 +106,7 @@ def load_history():
         return []
     cutoff = time.time() - WINDOW_S
     out = []
-    for line in SAMPLES.read_text().splitlines():
+    for line in SAMPLES.read_text(encoding="utf-8").splitlines():
         try:
             row = json.loads(line)
             if row["t"] >= cutoff:
@@ -343,18 +343,18 @@ def main():
     WWW.mkdir(parents=True, exist_ok=True)
     cur = sample()
 
-    with SAMPLES.open("a") as fh:
+    with SAMPLES.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(cur) + "\n")
 
     hist = load_history()
-    SAMPLES.write_text("".join(json.dumps(r) + "\n" for r in hist))
+    SAMPLES.write_text("".join(json.dumps(r) + "\n" for r in hist), encoding="utf-8")
 
     # Write via a temp file and rename: a reader mid-refresh gets the old page
     # whole rather than half of the new one.
     tmp = WWW / ".index.html.tmp"
-    tmp.write_text(render(cur, hist))
+    tmp.write_text(render(cur, hist), encoding="utf-8")
     os.replace(tmp, WWW / "index.html")
-    (ROOT / "summary.txt").write_text(summary(cur, hist))
+    (ROOT / "summary.txt").write_text(summary(cur, hist), encoding="utf-8")
 
 
 if __name__ == "__main__":
