@@ -101,6 +101,24 @@ def sample():
     # Per app: is its unit up, and does its PUBLIC url answer? Fetching the
     # public url exercises DNS -> Cloudflare -> tunnel -> app; a purely local
     # check would call a silently dead tunnel healthy.
+    # One podman stats call for every container, rather than one per app:
+    # each invocation samples over a short interval, so per-app calls would
+    # multiply the collector's own runtime by the number of apps.
+    stats = {}
+    raw = sh(
+        "sudo -u podsvc env XDG_RUNTIME_DIR=/run/user/1001 "
+        "podman stats --no-stream --format "
+        "'{{.Name}}\t{{.CPU}}\t{{.MemUsage}}\t{{.MemPerc}}'"
+    )
+    for line in raw.splitlines():
+        parts = line.split("\t")
+        if len(parts) == 4:
+            stats[parts[0]] = {
+                "cpu": parts[1].strip(),
+                "mem": parts[2].split("/")[0].strip(),
+                "mem_pct": parts[3].strip(),
+            }
+
     app_state = {}
     for a in apps():
         unit = sh(
@@ -111,7 +129,14 @@ def sample():
         code = sh(
             f"curl -s -o /dev/null -w '%{{http_code}}' --max-time 10 {a['url']}"
         )
-        app_state[a["name"]] = {"unit": unit or "unknown", "http": code or "000"}
+        st = stats.get(a["service"], {})
+        app_state[a["name"]] = {
+            "unit": unit or "unknown",
+            "http": code or "000",
+            "cpu": st.get("cpu", "—"),
+            "mem": st.get("mem", "—"),
+            "mem_pct": st.get("mem_pct", "—"),
+        }
 
     return {
         "t": int(time.time()),
@@ -248,8 +273,8 @@ def render(cur, hist):
     app_rows = []
     for name, a in sorted(cur.get("apps", {}).items()):
         st = "good" if (a["unit"] == "active" and a["http"] == "200") else "critical"
-        app_rows.append(row(name, f"{a['unit']} · HTTP {a['http']}",
-                            "container + public URL", st))
+        usage = f"{a.get('cpu','—')} CPU · {a.get('mem','—')} ({a.get('mem_pct','—')} of cap)"
+        app_rows.append(row(name, f"{a['unit']} · HTTP {a['http']}", usage, st))
 
     rows = "\n".join(app_rows + [
         row("cloudflared", cur["tunnel"], "tunnel", "good" if cur["tunnel"] == "active" else "critical"),
@@ -372,7 +397,8 @@ def summary(cur, hist):
         f"  memory  {cur['mem']}% ({cur['mem_mb']}/{cur['mem_total_mb']} MB)",
         f"  temp    {cur['temp']}C   throttled={cur['throttled']}",
         f"  load    {cur['load']}",
-        *[f"  {n:<7} {a['unit']}, HTTP {a['http']}"
+        *[f"  {n:<7} {a['unit']}, HTTP {a['http']}, "
+          f"{a.get('cpu','—')} cpu, {a.get('mem','—')} mem"
           for n, a in sorted(cur.get("apps", {}).items())],
         f"  tunnel  {cur['tunnel']}",
         f"  uptime24 {ok}/{len(hist)} samples all-green",
