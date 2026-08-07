@@ -155,26 +155,25 @@ sudo -u "$SERVICE_USER" mkdir -p \
 ok "layout: ${SVC_HOME}/{apps,data,.config/containers/systemd}"
 
 # ---------------------------------------------------------------------------
-say "Deploy key for cloning private repos"
+say "SSH known_hosts for github.com"
 # ---------------------------------------------------------------------------
-KEY="${SVC_HOME}/.ssh/id_ed25519"
-if sudo test -f "$KEY"; then
-  ok "key already present"
-else
-  sudo -u "$SERVICE_USER" mkdir -p "${SVC_HOME}/.ssh"
-  sudo -u "$SERVICE_USER" chmod 700 "${SVC_HOME}/.ssh"
-  sudo -u "$SERVICE_USER" ssh-keygen -t ed25519 -N "" -f "$KEY" -C "podsvc@$(hostname)" >/dev/null
-  ok "generated"
-fi
+# Deploy keys themselves are NOT generated here. This used to create one shared
+# key and tell you to add it to every private repo, which cannot work: GitHub
+# refuses to register the same public key as a deploy key on a second
+# repository. It went unnoticed while there was exactly one app, and would have
+# stranded the second one during a rebuild — precisely when you least want to
+# be debugging it.
+#
+# deploy-app.sh now generates ~/.ssh/id_ed25519_<app> per app and prints the
+# public key with the URL to add it to. All this needs to do is make sure
+# github.com is a known host, so the first clone does not block on a prompt no
+# one is there to answer.
+sudo -u "$SERVICE_USER" mkdir -p "${SVC_HOME}/.ssh"
+sudo -u "$SERVICE_USER" chmod 700 "${SVC_HOME}/.ssh"
 sudo -u "$SERVICE_USER" ssh-keyscan -H github.com 2>/dev/null \
   | sudo -u "$SERVICE_USER" tee -a "${SVC_HOME}/.ssh/known_hosts" >/dev/null
 sudo -u "$SERVICE_USER" sort -u -o "${SVC_HOME}/.ssh/known_hosts" "${SVC_HOME}/.ssh/known_hosts"
-
-echo
-echo "   Add this as a read-only deploy key on each private repo:"
-echo "   https://github.com/<owner>/<repo>/settings/keys/new"
-echo
-sudo cat "${KEY}.pub" | sed 's/^/     /'
+ok "github.com pinned in ${SVC_HOME}/.ssh/known_hosts"
 
 # ---------------------------------------------------------------------------
 say "Done"

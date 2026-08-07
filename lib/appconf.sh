@@ -48,6 +48,17 @@ appconf_load() {
   APP="$app"
   SVC_HOME="$(_svc_home)"
   CHECKOUT="${SVC_HOME}/apps/${app}"
+
+  # One deploy key per app, not one shared key. This is forced rather than
+  # chosen: GitHub refuses to register the same public key as a deploy key on a
+  # second repository, so a single key stops working the moment there are two
+  # private repos. It is also the better arrangement — whorl's key cannot read
+  # karb's source.
+  #
+  # GIT_SSH_COMMAND rather than a Host alias in ~/.ssh/config, so REPO stays a
+  # real, copy-pasteable GitHub URL and there is no second file to keep in sync.
+  DEPLOY_KEY="${SVC_HOME}/.ssh/id_ed25519_${app}"
+  GIT_SSH_COMMAND="ssh -i ${DEPLOY_KEY} -o IdentitiesOnly=yes"
   DATA_DIR="${SVC_HOME}/data/${DATA_SUBDIR}"
   ENV_FILE="${SVC_HOME}/.config/${app}.env"
   HEALTH_URL="http://127.0.0.1:${LOCAL_PORT}${HEALTH_PATH}"

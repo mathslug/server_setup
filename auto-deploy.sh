@@ -30,7 +30,10 @@ if [ ! -d "${CHECKOUT}/.git" ]; then
   exit 0
 fi
 
-asuser() { sudo -u "$SERVICE_USER" env HOME="$SVC_HOME" "$@"; }
+asuser() {
+  sudo -u "$SERVICE_USER" env \
+    HOME="$SVC_HOME" GIT_SSH_COMMAND="$GIT_SSH_COMMAND" "$@"
+}
 
 DEPLOYED=$(asuser git -C "$CHECKOUT" rev-parse HEAD)
 REMOTE=$(asuser git -C "$CHECKOUT" ls-remote origin "refs/heads/${BRANCH}" | cut -f1)

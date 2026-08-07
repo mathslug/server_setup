@@ -36,8 +36,38 @@ asuser() {
     HOME="$SVC_HOME" \
     XDG_RUNTIME_DIR="/run/user/${SVC_UID}" \
     DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${SVC_UID}/bus" \
+    GIT_SSH_COMMAND="$GIT_SSH_COMMAND" \
     "$@"
 }
+
+# ---------------------------------------------------------------------------
+say "Deploy key"
+# ---------------------------------------------------------------------------
+# Generated here rather than in bootstrap.sh because bootstrap runs before any
+# app exists, and each app needs its own key — GitHub will not register the
+# same public key as a deploy key on two repositories.
+if sudo test -f "$DEPLOY_KEY"; then
+  ok "$(basename "$DEPLOY_KEY")"
+else
+  asuser mkdir -p "${SVC_HOME}/.ssh"
+  asuser chmod 700 "${SVC_HOME}/.ssh"
+  asuser ssh-keygen -t ed25519 -N "" -f "$DEPLOY_KEY" -C "${APP}@$(hostname)" >/dev/null
+  ok "generated $(basename "$DEPLOY_KEY")"
+fi
+
+# Check access before doing anything expensive, so a missing deploy key fails
+# in two seconds with the fix printed, rather than part-way through a build.
+if ! asuser git ls-remote --exit-code "$REPO" HEAD >/dev/null 2>&1; then
+  OWNER_REPO=$(printf '%s' "$REPO" | sed 's#.*[:/]\([^/]*/[^/]*\)\.git#\1#')
+  echo
+  echo "   Cannot read ${REPO}."
+  echo "   Add this as a read-only deploy key:"
+  echo "     https://github.com/${OWNER_REPO}/settings/keys/new"
+  echo
+  sudo cat "${DEPLOY_KEY}.pub" | sed 's/^/     /'
+  echo
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 say "Source: ${REPO}"
