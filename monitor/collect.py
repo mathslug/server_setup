@@ -151,12 +151,18 @@ def sample():
             f"curl -s -o /dev/null -w '%{{http_code}}' --max-time 10 {a['url']}"
         )
         st = stats.get(a["service"], {})
+        # Disk here means the app's persistent state, not its image: images are
+        # layered and largely shared, while the data directory is what actually
+        # grows — and is the number worth watching once karb lands with a 703MB
+        # database on a 32GB card.
+        disk_b = sh(f"du -sb {a['data_dir']} 2>/dev/null | cut -f1")
         app_state[a["name"]] = {
             "unit": unit or "unknown",
             "http": code or "000",
             "cpu": st.get("cpu", "—"),
             "mem": st.get("mem", "—"),
             "mem_pct": st.get("mem_pct", "—"),
+            "disk": human_bytes(disk_b),
         }
 
     return {
@@ -294,7 +300,9 @@ def render(cur, hist):
     app_rows = []
     for name, a in sorted(cur.get("apps", {}).items()):
         st = "good" if (a["unit"] == "active" and a["http"] == "200") else "critical"
-        usage = f"{a.get('cpu','—')} CPU · {a.get('mem','—')} ({a.get('mem_pct','—')} of cap)"
+        usage = (f"{a.get('cpu','—')} CPU · "
+                 f"{a.get('mem','—')} RAM ({a.get('mem_pct','—')} of cap) · "
+                 f"{a.get('disk','—')} disk")
         app_rows.append(row(name, f"{a['unit']} · HTTP {a['http']}", usage, st))
 
     rows = "\n".join(app_rows + [
@@ -419,7 +427,7 @@ def summary(cur, hist):
         f"  temp    {cur['temp']}C   throttled={cur['throttled']}",
         f"  load    {cur['load']}",
         *[f"  {n:<7} {a['unit']}, HTTP {a['http']}, "
-          f"{a.get('cpu','—')} cpu, {a.get('mem','—')} mem"
+          f"{a.get('cpu','—')} cpu, {a.get('mem','—')} ram, {a.get('disk','—')} disk"
           for n, a in sorted(cur.get("apps", {}).items())],
         f"  tunnel  {cur['tunnel']}",
         f"  uptime24 {ok}/{len(hist)} samples all-green",
