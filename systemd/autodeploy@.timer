@@ -1,0 +1,24 @@
+# Templated: enable with `systemctl enable --now autodeploy@whorl.timer`.
+#
+# 15 minutes is a deliberate choice rather than a compromise. The poll itself is
+# a single `git ls-remote` — one SSH round trip, no objects fetched, nothing
+# written to disk — so the cost is unmeasurable on an idle Pi. The interval only
+# sets how long a push waits before it lands: 7.5 minutes on average.
+
+[Unit]
+Description=Poll for new commits to %i and redeploy
+
+[Timer]
+# Not at boot exactly: let the network, the tunnel and the app settle first.
+OnBootSec=5min
+OnUnitActiveSec=15min
+
+# Avoid every app polling GitHub on the same second once there are several.
+RandomizedDelaySec=90
+
+# If the Pi was off when a poll was due, run once shortly after boot rather
+# than silently skipping it.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -12,9 +12,30 @@ from a blank card without reference to anything that was on the old one.
 ```
 bootstrap.sh        one-time (idempotent) Pi setup — run on a fresh install
 deploy-app.sh       clone/build/start one app; re-run to update it
+auto-deploy.sh      redeploy only if the branch moved; driven by a timer
 apps/<name>.conf    per-app deployment config (repo, unit path, health URL)
+cloudflared/        tunnel ingress + hardened systemd unit
+systemd/            templated autodeploy@.service / .timer
 PLAN.md             the migration this is part of, and why
 ```
+
+## Automatic deploys
+
+GitHub Actions cannot reach the Pi — the tunnel only carries inbound traffic
+for the apps, and nothing else connects in. So deploys are *pulled*, not pushed:
+
+```
+sudo mkdir -p /opt/rpi/apps
+# copy deploy-app.sh, auto-deploy.sh and apps/*.conf into /opt/rpi
+# copy systemd/autodeploy@.{service,timer} into /etc/systemd/system
+sudo systemctl enable --now autodeploy@<app>.timer
+```
+
+Every 15 minutes the timer runs a single `git ls-remote` — one SSH round trip,
+no objects fetched, nothing written — and exits if the deployed SHA matches.
+A rebuild only happens when the branch actually moved. If a build fails, the
+previous container keeps serving; `deploy-app.sh` only restarts after a
+successful build.
 
 On the Pi itself:
 

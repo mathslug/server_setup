@@ -1,0 +1,19 @@
+# Templated: autodeploy@whorl.service, autodeploy@karb.service, ...
+# Installed to /etc/systemd/system/. Started by autodeploy@.timer.
+
+[Unit]
+Description=Redeploy %i if its branch has moved
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/rpi/auto-deploy.sh %i
+
+# A failed deploy must not take down the running version. deploy-app.sh only
+# restarts the service after a successful image build, so a broken commit
+# leaves the previous container serving. This just records the failure.
+SuccessExitStatus=0
+
+# Don't let a hung build block the timer forever.
+TimeoutStartSec=20min
