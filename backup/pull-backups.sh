@@ -79,8 +79,15 @@ for entry in "${APPS[@]}"; do
   LINK_ARG=""
   [ -d "${LATEST}/${APP}/images" ] && LINK_ARG="--link-dest=${LATEST}/${APP}/images"
   rsync -a --rsync-path="sudo rsync" $LINK_ARG \
-    "${PI}:${DATA_DIR}/images/" "${RUN}/${APP}/images/" 2>/dev/null || true
-  scp -q "${PI}:${ENV_FILE}" "${RUN}/${APP}/env" 2>/dev/null || true
+    "${PI}:${DATA_DIR}/images/" "${RUN}/${APP}/images/" \
+    || fail "${APP}: images rsync failed"
+
+  # Via sudo cat, not scp: the env file is 0600 and owned by the service
+  # account, so scp as the login user silently reads nothing.
+  ssh -o BatchMode=yes "$PI" "sudo cat ${ENV_FILE}" > "${RUN}/${APP}/env" \
+    || fail "${APP}: could not read ${ENV_FILE}"
+  chmod 600 "${RUN}/${APP}/env"
+  [ -s "${RUN}/${APP}/env" ] || fail "${APP}: env file came back empty"
 
   # 4. Verify. Fail loudly rather than keeping a file that only looks like a backup.
   RESULT=$(node -e '
@@ -98,6 +105,27 @@ for entry in "${APPS[@]}"; do
   IMG=$(find "${RUN}/${APP}/images" -type f 2>/dev/null | wc -l | tr -d ' ')
   log "${APP}: ok — ${RESULT} images=${IMG} size=$(du -sh "${RUN}/${APP}" | cut -f1)"
 done
+
+# --- Host state -------------------------------------------------------------
+# Not application data, but without it a rebuilt Pi cannot serve. The tunnel
+# credentials in particular are unrecoverable: Cloudflare issues the token once
+# at `tunnel create` and will not reissue it. Lose them and the only path is
+# creating a NEW tunnel and repointing DNS.
+log "--- host ---"
+mkdir -p "${RUN}/host/cloudflared"
+chmod 700 "${RUN}/host"
+
+for f in /etc/cloudflared/config.yml /root/.cloudflared/cert.pem; do
+  ssh -o BatchMode=yes "$PI" "sudo cat $f" > "${RUN}/host/cloudflared/$(basename "$f")" \
+    || fail "host: could not read $f"
+done
+# The tunnel credentials file is named for the tunnel UUID.
+CRED=$(ssh -o BatchMode=yes "$PI" "sudo sh -c 'ls -1 /etc/cloudflared/*.json'" | head -1)
+ssh -o BatchMode=yes "$PI" "sudo cat ${CRED}" > "${RUN}/host/cloudflared/$(basename "$CRED")" \
+  || fail "host: could not read tunnel credentials"
+
+chmod 600 "${RUN}"/host/cloudflared/*
+log "host: cloudflared config + tunnel credentials"
 
 # Promote to `latest` so tomorrow's run can hardlink against this one.
 rm -f "$LATEST"; ln -s "$RUN" "$LATEST"
