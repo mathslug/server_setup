@@ -327,7 +327,6 @@ def render(cur, hist):
     )
     n = len(judged)
     pct = (100.0 * ok_http / n) if n else 100.0
-    skipped = len(hist) - n
 
     return f"""<!doctype html>
 <html lang="en"><head>
@@ -415,7 +414,7 @@ def render(cur, hist):
 </table>
 
 <footer>
-  All public URLs healthy on {ok_http} of {n} checks in the last 24h ({pct:.0f}%){f', {skipped} older samples not comparable' if skipped else ''}.
+  All public URLs healthy on {ok_http} of {n} checks in the last 24h ({pct:.0f}%).
   Sampled every {INTERVAL_S // 60} minutes; page refreshes itself every minute.
 </footer>
 </div></body></html>
