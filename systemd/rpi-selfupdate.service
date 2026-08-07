@@ -16,6 +16,13 @@ Wants=network-online.target
 Type=oneshot
 ExecStart=/usr/bin/git -C /opt/rpi fetch --quiet origin main
 ExecStart=/usr/bin/git -C /opt/rpi reset --quiet --hard origin/main
+# Sync the system units themselves. Without this /opt/rpi tracked git and
+# /etc/systemd/system did not, so any change to a unit was pulled and then
+# ignored — including the line below, which is how a new app silently failed to
+# appear in the tunnel ingress. Safe to run from the unit it rewrites: it only
+# writes files and reloads, and systemd finishes the current invocation under
+# the already-loaded definition.
+ExecStart=/opt/rpi/systemd/install-units.sh
 # Regenerate the tunnel ingress from apps/*.conf and reload if it changed.
 # Without this the deployed /etc/cloudflared/config.yml drifts from the repo
 # the first time an app is added, silently and without error. The script

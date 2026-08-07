@@ -125,11 +125,20 @@ ssh mypi 'cd /tmp && sudo sh -c "
 
 ```
 ssh mypi 'sudo sh -c "
-  cp /opt/rpi/systemd/*.service /opt/rpi/systemd/*.timer /etc/systemd/system/
-  systemctl daemon-reload
-  systemctl enable --now rpi-selfupdate.timer autodeploy@whorl.timer
+  /opt/rpi/systemd/install-units.sh
+  systemctl enable --now rpi-selfupdate.timer rpi-health.timer
+  systemctl enable --now autodeploy@whorl.timer autodeploy@karb.timer
 "'
 ```
+
+`install-units.sh` is also run by `rpi-selfupdate.service` on every pull, so
+after this the units stay in step with the repo on their own. It used to be a
+hand-copy here and nowhere else, which meant `/opt/rpi` tracked git while
+`/etc/systemd/system` quietly did not.
+
+karb's own timers — the four scan/evaluate jobs — are user units and are
+installed and enabled by `deploy-app.sh` from the app's repo, so there is
+nothing to do for them here.
 
 ## 9. Verify
 
