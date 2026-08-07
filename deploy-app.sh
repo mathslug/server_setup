@@ -79,7 +79,32 @@ say "Install unit and start"
 # ---------------------------------------------------------------------------
 asuser install -m 0644 "${CHECKOUT}/${QUADLET}" \
   "${SVC_HOME}/.config/containers/systemd/$(basename "$QUADLET")"
+
+# Optional plain systemd user units shipped by the app — timers and the
+# services they drive. They live in the app's repo rather than here so that a
+# schedule change ships with the code change that motivated it, and arrives
+# through the same auto-deploy.
+if [ -n "${UNITS_DIR:-}" ] && sudo test -d "${CHECKOUT}/${UNITS_DIR}"; then
+  asuser mkdir -p "${SVC_HOME}/.config/systemd/user"
+  for unit in $(sudo sh -c "ls -1 ${CHECKOUT}/${UNITS_DIR}"); do
+    asuser install -m 0644 "${CHECKOUT}/${UNITS_DIR}/${unit}" \
+      "${SVC_HOME}/.config/systemd/user/${unit}"
+  done
+  ok "units: $(sudo sh -c "ls -1 ${CHECKOUT}/${UNITS_DIR}" | tr '\n' ' ')"
+fi
+
 asuser systemctl --user daemon-reload
+
+# Enable timers after the reload, so systemd sees the units just installed. A
+# timer removed from the repo is not disabled here; that is a deliberate manual
+# step, since silently stopping scheduled work is worse than leaving it.
+if [ -n "${UNITS_DIR:-}" ] && sudo test -d "${CHECKOUT}/${UNITS_DIR}"; then
+  for timer in $(sudo sh -c "ls -1 ${CHECKOUT}/${UNITS_DIR}" | grep '\.timer$' || true); do
+    asuser systemctl --user enable --now "$timer" >/dev/null 2>&1
+    ok "timer: ${timer} — next $(asuser systemctl --user show "$timer" -p NextElapseUSecRealtime --value)"
+  done
+fi
+
 asuser systemctl --user restart "${SERVICE}.service"
 ok "$(asuser systemctl --user is-active "${SERVICE}.service") — ${SERVICE}.service"
 

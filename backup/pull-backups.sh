@@ -10,17 +10,25 @@
 #   * PULL, not push. The Mac sleeps and moves; the Pi does not. A push from
 #     the Pi would fail silently every time the laptop was closed.
 #
-#   * VACUUM INTO, never cp. whorl's database keeps most of its data in the
-#     write-ahead log — production's app.db was 4096 bytes with 1.3MB of WAL.
-#     Copying app.db alone yields a valid, EMPTY database with no error. VACUUM
-#     INTO takes a transactionally consistent snapshot of a live database and
-#     folds the WAL in, so this needs no downtime and cannot tear.
+#   * VACUUM INTO, never cp. Both apps run SQLite in WAL mode, so recent writes
+#     live in the -wal file rather than in the database — production's whorl
+#     app.db was once 4096 bytes with 1.3MB of WAL, and copying it alone yields
+#     a valid, EMPTY database with no error. VACUUM INTO takes a
+#     transactionally consistent snapshot of a live database and folds the WAL
+#     in, so this needs no downtime and cannot tear. The snapshot script lives
+#     in each app's repo, because it has to run in that app's runtime.
 #
 #   * Dated snapshots, not a mirror. A mirror faithfully replicates corruption
-#     over the last good copy. Unchanged images hardlink to the previous run
+#     over the last good copy. Unchanged files hardlink to the previous run
 #     via --link-dest, so history is nearly free.
 #
-#   * Verify every run. A backup nobody has opened is a rumour.
+#   * Compressed on the Pi. SQLite compresses to about 15%, and karb's database
+#     is 710MB. Uncompressed this would be 710MB over wifi nightly and 15.6GB
+#     of retained snapshots; compressed it is ~107MB and ~2.4GB.
+#
+#   * Verify every run. A backup nobody has opened is a rumour. What is
+#     verified is the compressed copy that was actually kept, not the original
+#     on the Pi.
 
 set -euo pipefail
 
@@ -56,31 +64,38 @@ for APP in $(appconf_list); do
   log "--- ${APP} ---"
   mkdir -p "${RUN}/${APP}"
 
-  # 1. Consistent snapshot of the live database, taken on the Pi.
-  #    Node ships SQLite (node:sqlite); the sqlite3 CLI is not installed and is
-  #    not needed. The snapshot is written inside the container so it sees the
-  #    same file the app has open.
+  # 1. Consistent snapshot of the live database, taken on the Pi inside the
+  #    app's own container so it sees the same file the app has open. The
+  #    command comes from the app's conf because it has to run in the app's
+  #    runtime — node for whorl, python for karb — and lives as a script in the
+  #    app's repo rather than inline here, because the escaping needed to pass
+  #    a nested-quoted one-liner through ssh breaks silently.
   ssh -o BatchMode=yes "$PI" "cd /tmp && sudo -u podsvc env HOME=/home/podsvc \
-      XDG_RUNTIME_DIR=/run/user/1001 podman exec ${APP} node -e '
-    const {DatabaseSync} = require(\"node:sqlite\");
-    const fs = require(\"fs\");
-    try { fs.unlinkSync(\"/data/.backup.db\"); } catch {}
-    const db = new DatabaseSync(\"/data/app.db\", {readOnly:true});
-    db.exec(\"VACUUM INTO \x27/data/.backup.db\x27\");
-  '" || fail "${APP}: snapshot failed"
+      XDG_RUNTIME_DIR=/run/user/1001 podman exec ${APP} ${BACKUP_SNAPSHOT_CMD}" \
+    >/dev/null || fail "${APP}: snapshot failed"
 
-  # 2. Retrieve it, then remove it from the Pi so it isn't served or re-backed-up.
-  scp -q "${PI}:${DATA_DIR}/.backup.db" "${RUN}/${APP}/app.db" \
-    || fail "${APP}: could not retrieve snapshot"
+  # 2. Retrieve it compressed, then remove it from the Pi so it isn't served or
+  #    re-backed-up. gzip runs on the Pi and streams, so nothing extra is
+  #    written to the SD card. karb's database is 710MB and compresses to 15%:
+  #    that is the difference between 710MB and ~107MB over wifi every night,
+  #    and between 15.6GB and 2.4GB of retained snapshots.
+  ssh -o BatchMode=yes "$PI" "sudo gzip -c ${DATA_DIR}/.backup.db" \
+    > "${RUN}/${APP}/${BACKUP_DB}.gz" || fail "${APP}: could not retrieve snapshot"
   ssh -o BatchMode=yes "$PI" "sudo rm -f ${DATA_DIR}/.backup.db"
+  [ -s "${RUN}/${APP}/${BACKUP_DB}.gz" ] || fail "${APP}: snapshot came back empty"
 
-  # 3. Images and config. --link-dest makes unchanged files hardlinks against
-  #    yesterday's run: a new dated snapshot that costs almost nothing.
-  LINK_ARG=""
-  [ -d "${LATEST}/${APP}/images" ] && LINK_ARG="--link-dest=${LATEST}/${APP}/images"
-  rsync -a --rsync-path="sudo rsync" $LINK_ARG \
-    "${PI}:${DATA_DIR}/images/" "${RUN}/${APP}/images/" \
-    || fail "${APP}: images rsync failed"
+  # 3. Any state that is not in the database. --link-dest makes unchanged files
+  #    hardlinks against yesterday's run: a new dated snapshot that costs almost
+  #    nothing. karb has none of this; whorl has its uploaded photos.
+  FILES=0
+  for DIR in ${BACKUP_DIRS:-}; do
+    LINK_ARG=""
+    [ -d "${LATEST}/${APP}/${DIR}" ] && LINK_ARG="--link-dest=${LATEST}/${APP}/${DIR}"
+    rsync -a --rsync-path="sudo rsync" $LINK_ARG \
+      "${PI}:${DATA_DIR}/${DIR}/" "${RUN}/${APP}/${DIR}/" \
+      || fail "${APP}: ${DIR} rsync failed"
+    FILES=$(( FILES + $(find "${RUN}/${APP}/${DIR}" -type f 2>/dev/null | wc -l | tr -d ' ') ))
+  done
 
   # Via sudo cat, not scp: the env file is 0600 and owned by the service
   # account, so scp as the login user silently reads nothing.
@@ -89,21 +104,35 @@ for APP in $(appconf_list); do
   chmod 600 "${RUN}/${APP}/env"
   [ -s "${RUN}/${APP}/env" ] || fail "${APP}: env file came back empty"
 
-  # 4. Verify. Fail loudly rather than keeping a file that only looks like a backup.
-  RESULT=$(node -e '
-    const {DatabaseSync} = require("node:sqlite");
-    const db = new DatabaseSync(process.argv[1], {readOnly:true});
-    const ic = db.prepare("pragma integrity_check").get().integrity_check;
-    if (ic !== "ok") { console.error("integrity: " + ic); process.exit(1); }
-    const t = db.prepare("select name from sqlite_master where type=@t").all({t:"table"})
-                .map(r => r.name).filter(n => !n.startsWith("sqlite_"));
-    if (!t.length) { console.error("no tables"); process.exit(1); }
-    const counts = t.map(n => n + "=" + db.prepare(`select count(*) c from "${n}"`).get().c);
-    console.log(counts.join(" "));
-  ' "${RUN}/${APP}/app.db") || fail "${APP}: snapshot failed verification"
+  # 4. Verify. Fail loudly rather than keeping a file that only looks like a
+  #    backup. Decompressed to a scratch file first: sqlite needs a real file,
+  #    and checking the compressed copy we actually keep is the whole point —
+  #    verifying the Pi's original would prove nothing about what arrived here.
+  #    python3 rather than each app's own runtime, so there is one verifier.
+  TMPDB=$(mktemp "${TMPDIR:-/tmp}/pi-backup-verify.XXXXXX")
+  gunzip -c "${RUN}/${APP}/${BACKUP_DB}.gz" > "$TMPDB" \
+    || { rm -f "$TMPDB"; fail "${APP}: snapshot will not decompress"; }
+  RESULT=$(python3 - "$TMPDB" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
+ok = db.execute("pragma integrity_check").fetchone()[0]
+if ok != "ok":
+    sys.exit(f"integrity: {ok}")
+tables = [r[0] for r in db.execute("select name from sqlite_master where type='table'")
+          if not r[0].startswith("sqlite_")]
+if not tables:
+    sys.exit("no tables")
+counts = []
+for t in tables:
+    n = db.execute(f'select count(*) from "{t}"').fetchone()[0]
+    counts.append(f"{t}={n}")
+print(" ".join(counts))
+PY
+  ) || { rm -f "$TMPDB"; fail "${APP}: snapshot failed verification"; }
+  rm -f "$TMPDB"
 
-  IMG=$(find "${RUN}/${APP}/images" -type f 2>/dev/null | wc -l | tr -d ' ')
-  log "${APP}: ok — ${RESULT} images=${IMG} size=$(du -sh "${RUN}/${APP}" | cut -f1)"
+  log "${APP}: ok — ${RESULT}"
+  log "${APP}: files=${FILES} size=$(du -sh "${RUN}/${APP}" | cut -f1)"
 done
 
 # --- Host state -------------------------------------------------------------
