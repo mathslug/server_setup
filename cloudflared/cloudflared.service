@@ -1,0 +1,62 @@
+# Cloudflare Tunnel.
+#
+# Installed to /etc/systemd/system/cloudflared.service.
+#
+# Written by hand rather than using `cloudflared service install`, for two
+# reasons: the generated unit runs as root, and it isn't in version control.
+# This one runs as a dedicated unprivileged account and lives in git.
+#
+# cloudflared only ever dials outbound, so it needs no privileged ports and no
+# capabilities at all.
+
+[Unit]
+Description=Cloudflare Tunnel (mypi)
+Documentation=https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=cloudflared
+Group=cloudflared
+ExecStart=/usr/bin/cloudflared --config /etc/cloudflared/config.yml --no-autoupdate tunnel run
+Restart=always
+RestartSec=5
+
+# Survive a flaky wifi link rather than giving up. Without these, repeated
+# reconnects during an outage can trip systemd's default start-limit and leave
+# the tunnel down after the network returns.
+StartLimitBurst=0
+
+# --- Hardening -------------------------------------------------------------
+# Container isolation is not available here (this is a host service), so the
+# equivalent restrictions are applied through systemd instead. Check the result
+# with: systemd-analyze security cloudflared.service
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RemoveIPC=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+ReadOnlyPaths=/etc/cloudflared
+
+[Install]
+WantedBy=multi-user.target
