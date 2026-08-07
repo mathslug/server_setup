@@ -415,7 +415,7 @@ def render(cur, hist):
 
 <footer>
   All public URLs healthy on {ok_http} of {n} checks in the last 24h ({pct:.0f}%).
-  Sampled every {INTERVAL_S // 60} minutes; page refreshes itself every minute.
+  Sampled every {INTERVAL_S // 60} minutes.
 </footer>
 </div></body></html>
 """
