@@ -46,14 +46,25 @@ say "Deploy key"
 # Generated here rather than in bootstrap.sh because bootstrap runs before any
 # app exists, and each app needs its own key — GitHub will not register the
 # same public key as a deploy key on two repositories.
-if sudo test -f "$DEPLOY_KEY"; then
-  ok "$(basename "$DEPLOY_KEY")"
-else
-  asuser mkdir -p "${SVC_HOME}/.ssh"
-  asuser chmod 700 "${SVC_HOME}/.ssh"
-  asuser ssh-keygen -t ed25519 -N "" -f "$DEPLOY_KEY" -C "${APP}@$(hostname)" >/dev/null
-  ok "generated $(basename "$DEPLOY_KEY")"
-fi
+#
+# Only for SSH remotes. A public repo cloned over HTTPS needs no credential at
+# all, which is one less thing to restore after a wipe, so the conf choosing an
+# https:// URL is a deliberate statement that the repo is public.
+case "$REPO" in
+  git@*|ssh://*)
+    if sudo test -f "$DEPLOY_KEY"; then
+      ok "$(basename "$DEPLOY_KEY")"
+    else
+      asuser mkdir -p "${SVC_HOME}/.ssh"
+      asuser chmod 700 "${SVC_HOME}/.ssh"
+      asuser ssh-keygen -t ed25519 -N "" -f "$DEPLOY_KEY" -C "${APP}@$(hostname)" >/dev/null
+      ok "generated $(basename "$DEPLOY_KEY")"
+    fi
+    ;;
+  *)
+    ok "public repo over https — no deploy key needed"
+    ;;
+esac
 
 # Check access before doing anything expensive, so a missing deploy key fails
 # in two seconds with the fix printed, rather than part-way through a build.
@@ -61,10 +72,18 @@ if ! asuser git ls-remote --exit-code "$REPO" HEAD >/dev/null 2>&1; then
   OWNER_REPO=$(printf '%s' "$REPO" | sed 's#.*[:/]\([^/]*/[^/]*\)\.git#\1#')
   echo
   echo "   Cannot read ${REPO}."
-  echo "   Add this as a read-only deploy key:"
-  echo "     https://github.com/${OWNER_REPO}/settings/keys/new"
-  echo
-  sudo cat "${DEPLOY_KEY}.pub" | sed 's/^/     /'
+  case "$REPO" in
+    git@*|ssh://*)
+      echo "   Add this as a read-only deploy key:"
+      echo "     https://github.com/${OWNER_REPO}/settings/keys/new"
+      echo
+      sudo cat "${DEPLOY_KEY}.pub" | sed 's/^/     /'
+      ;;
+    *)
+      echo "   The repo is configured as public. If it is private, change REPO"
+      echo "   in apps/${APP}.conf to the git@github.com: form and re-run."
+      ;;
+  esac
   echo
   exit 1
 fi
