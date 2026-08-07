@@ -38,6 +38,9 @@ PI="${PI_HOST:-}"
 # survives the repo being moved. Git-ignored; Time Machine covers it.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="${BACKUP_DEST:-${REPO_ROOT}/backups}"
+# Days and weeks, not runs — same-day snapshots are collapsed to the newest
+# before these are counted. See collapse_same_day() for why that distinction
+# turned out to matter.
 KEEP_DAILY=14
 KEEP_WEEKLY=8
 
@@ -245,6 +248,30 @@ prune() {
     done
   fi
 }
+# Collapse each day to its newest run BEFORE counting, so KEEP_DAILY means days
+# rather than runs.
+#
+# It did not, and the difference is not academic: nine manual runs in one
+# afternoon had already reduced a nominal fourteen-day window to two days of
+# actual history. The dangerous version is noticing corruption, running the
+# backup a few times while investigating, and evicting every good copy — which
+# is exactly the mirror behaviour dated snapshots exist to prevent.
+#
+# Iterating newest-first keeps the first run seen for each date, so the current
+# run always survives and `latest` cannot be left dangling.
+collapse_same_day() {
+  local dir="$1" d day prev=""
+  for d in $(ls -1 "$dir" 2>/dev/null | sort -r); do
+    day="${d%%_*}"
+    if [ "$day" = "$prev" ]; then
+      rm -rf "${dir:?}/${d}" && log "pruned daily/${d} (superseded later the same day)"
+    else
+      prev="$day"
+    fi
+  done
+}
+collapse_same_day "${DEST}/daily"
+
 prune "${DEST}/daily" "$KEEP_DAILY"
 prune "${DEST}/weekly" "$KEEP_WEEKLY"
 [ -e "$LATEST" ] || ln -s "$RUN" "$LATEST"
