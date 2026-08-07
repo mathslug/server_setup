@@ -50,7 +50,14 @@ LATEST="${DEST}/latest"
 . "${REPO_ROOT}/lib/appconf.sh"
 
 log() { printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
+
+# fail() aborts the whole run; it is for conditions that make every app
+# hopeless, like the Pi being unreachable. A single app failing must not take
+# the others down with it — that is app_fail(), which gives up on one app and
+# lets the loop continue. The run still exits non-zero at the end.
 fail() { log "FAILED: $*"; exit 1; }
+app_fail() { log "FAILED: $*"; return 1; }
+FAILED_APPS=""
 
 mkdir -p "${DEST}/daily" "${DEST}/weekly"
 
@@ -59,9 +66,9 @@ log "=== backup run ${STAMP} ==="
 ssh -o ConnectTimeout=15 -o BatchMode=yes "$PI" true 2>/dev/null \
   || fail "cannot reach ${PI} over ssh"
 
-for APP in $(appconf_list); do
+backup_app() {
+  local APP="$1"
   appconf_load "$APP"
-  log "--- ${APP} ---"
   mkdir -p "${RUN}/${APP}"
 
   # 1. Consistent snapshot of the live database, taken on the Pi inside the
@@ -72,7 +79,7 @@ for APP in $(appconf_list); do
   #    a nested-quoted one-liner through ssh breaks silently.
   ssh -o BatchMode=yes "$PI" "cd /tmp && sudo -u podsvc env HOME=/home/podsvc \
       XDG_RUNTIME_DIR=/run/user/1001 podman exec ${APP} ${BACKUP_SNAPSHOT_CMD}" \
-    >/dev/null || fail "${APP}: snapshot failed"
+    >/dev/null || { app_fail "${APP}: snapshot failed"; return 1; }
 
   # 2. Retrieve it compressed, then remove it from the Pi so it isn't served or
   #    re-backed-up. gzip runs on the Pi and streams, so nothing extra is
@@ -80,9 +87,9 @@ for APP in $(appconf_list); do
   #    that is the difference between 710MB and ~107MB over wifi every night,
   #    and between 15.6GB and 2.4GB of retained snapshots.
   ssh -o BatchMode=yes "$PI" "sudo gzip -c ${DATA_DIR}/.backup.db" \
-    > "${RUN}/${APP}/${BACKUP_DB}.gz" || fail "${APP}: could not retrieve snapshot"
+    > "${RUN}/${APP}/${BACKUP_DB}.gz" || { app_fail "${APP}: could not retrieve snapshot"; return 1; }
   ssh -o BatchMode=yes "$PI" "sudo rm -f ${DATA_DIR}/.backup.db"
-  [ -s "${RUN}/${APP}/${BACKUP_DB}.gz" ] || fail "${APP}: snapshot came back empty"
+  [ -s "${RUN}/${APP}/${BACKUP_DB}.gz" ] || { app_fail "${APP}: snapshot came back empty"; return 1; }
 
   # 3. Any state that is not in the database. --link-dest makes unchanged files
   #    hardlinks against yesterday's run: a new dated snapshot that costs almost
@@ -93,16 +100,16 @@ for APP in $(appconf_list); do
     [ -d "${LATEST}/${APP}/${DIR}" ] && LINK_ARG="--link-dest=${LATEST}/${APP}/${DIR}"
     rsync -a --rsync-path="sudo rsync" $LINK_ARG \
       "${PI}:${DATA_DIR}/${DIR}/" "${RUN}/${APP}/${DIR}/" \
-      || fail "${APP}: ${DIR} rsync failed"
+      || { app_fail "${APP}: ${DIR} rsync failed"; return 1; }
     FILES=$(( FILES + $(find "${RUN}/${APP}/${DIR}" -type f 2>/dev/null | wc -l | tr -d ' ') ))
   done
 
   # Via sudo cat, not scp: the env file is 0600 and owned by the service
   # account, so scp as the login user silently reads nothing.
   ssh -o BatchMode=yes "$PI" "sudo cat ${ENV_FILE}" > "${RUN}/${APP}/env" \
-    || fail "${APP}: could not read ${ENV_FILE}"
+    || { app_fail "${APP}: could not read ${ENV_FILE}"; return 1; }
   chmod 600 "${RUN}/${APP}/env"
-  [ -s "${RUN}/${APP}/env" ] || fail "${APP}: env file came back empty"
+  [ -s "${RUN}/${APP}/env" ] || { app_fail "${APP}: env file came back empty"; return 1; }
 
   # 4. Verify. Fail loudly rather than keeping a file that only looks like a
   #    backup. Decompressed to a scratch file first: sqlite needs a real file,
@@ -111,7 +118,7 @@ for APP in $(appconf_list); do
   #    python3 rather than each app's own runtime, so there is one verifier.
   TMPDB=$(mktemp "${TMPDIR:-/tmp}/pi-backup-verify.XXXXXX")
   gunzip -c "${RUN}/${APP}/${BACKUP_DB}.gz" > "$TMPDB" \
-    || { rm -f "$TMPDB"; fail "${APP}: snapshot will not decompress"; }
+    || { rm -f "$TMPDB"; app_fail "${APP}: snapshot will not decompress"; return 1; }
   RESULT=$(python3 - "$TMPDB" <<'PY'
 import sqlite3, sys
 db = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
@@ -128,11 +135,20 @@ for t in tables:
     counts.append(f"{t}={n}")
 print(" ".join(counts))
 PY
-  ) || { rm -f "$TMPDB"; fail "${APP}: snapshot failed verification"; }
+  ) || { rm -f "$TMPDB"; app_fail "${APP}: snapshot failed verification"; return 1; }
   rm -f "$TMPDB"
 
   log "${APP}: ok — ${RESULT}"
   log "${APP}: files=${FILES} size=$(du -sh "${RUN}/${APP}" | cut -f1)"
+}
+
+# Apps are discovered from apps/*.conf rather than listed here, so a new app is
+# backed up the moment its config exists — no second place to remember. The
+# cost of that is a window where a conf exists and the app is not deployed yet,
+# which is exactly why one app's failure must not abort the others.
+for APP in $(appconf_list); do
+  log "--- ${APP} ---"
+  backup_app "$APP" || FAILED_APPS="${FAILED_APPS} ${APP}"
 done
 
 # --- Host state -------------------------------------------------------------
@@ -178,5 +194,14 @@ prune() {
 prune "${DEST}/daily" "$KEEP_DAILY"
 prune "${DEST}/weekly" "$KEEP_WEEKLY"
 [ -e "$LATEST" ] || ln -s "$RUN" "$LATEST"
+
+if [ -n "$FAILED_APPS" ]; then
+  # The run still promoted and pruned: the apps that did succeed have a good
+  # snapshot, and refusing to keep it would be worse. But the exit status is
+  # what launchd records, so this does not pass as a clean run.
+  log "=== INCOMPLETE — no backup for:${FAILED_APPS} ==="
+  log "=== total $(du -sh "$DEST" | cut -f1) in ${DEST} ==="
+  exit 1
+fi
 
 log "=== done — total $(du -sh "$DEST" | cut -f1) in ${DEST} ==="

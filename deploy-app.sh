@@ -74,6 +74,26 @@ say "Build ${IMAGE}:latest"
 asuser podman build --quiet -t "${IMAGE}:latest" "$CHECKOUT" >/dev/null
 ok "built $(asuser podman image inspect "${IMAGE}:latest" --format '{{.Id}}' | cut -c1-12)"
 
+# The image and the app's conf hold two facts that have to agree: the conf says
+# how to snapshot the database, and the image has to actually contain that
+# script. Nothing connected them, so when whorl's .containerignore excluded the
+# directory the snapshot script had just moved into, the only symptom was the
+# backup failing at 00:30 — hours after the deploy that broke it, in a log
+# nobody was reading.
+#
+# Checking it here costs one container start and moves the failure to the
+# deploy that caused it.
+if [ -n "${BACKUP_SNAPSHOT_CMD:-}" ]; then
+  SNAP_SCRIPT=$(printf '%s' "$BACKUP_SNAPSHOT_CMD" | awk '{print $NF}')
+  asuser podman run --rm --entrypoint "" "${IMAGE}:latest" \
+    test -f "$SNAP_SCRIPT" \
+    || { echo "   ${SNAP_SCRIPT} is not in the image, so backups cannot snapshot"
+         echo "   ${APP}'s database. Check .containerignore and the conf's"
+         echo "   BACKUP_SNAPSHOT_CMD; they have to agree."
+         exit 1; }
+  ok "backup snapshot script present: ${SNAP_SCRIPT}"
+fi
+
 # ---------------------------------------------------------------------------
 say "Install unit and start"
 # ---------------------------------------------------------------------------
