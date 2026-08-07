@@ -44,13 +44,14 @@ def apps():
     for conf in sorted((HERE / "apps").glob("*.conf")):
         name = conf.stem
         got = sh(
-            f'. "{conf}"; printf "%s\\n%s\\n%s\\n%s" '
-            f'"$SERVICE" "$HOSTNAME" "$LOCAL_PORT" "$HEALTH_PATH"'
+            f'. "{conf}"; printf "%s\\n%s\\n%s\\n%s\\n%s" '
+            f'"$SERVICE" "$HOSTNAME" "$LOCAL_PORT" "$HEALTH_PATH" "$DATA_SUBDIR"'
         ).split("\n")
-        if len(got) == 4 and got[0]:
+        if len(got) == 5 and got[0]:
             out.append({
                 "name": name, "service": got[0], "host": got[1],
                 "url": f"https://{got[1]}{got[3]}",
+                "data_dir": f"/home/podsvc/data/{got[4]}",
             })
     return out
 
@@ -65,6 +66,17 @@ def sh(cmd, timeout=15):
         ).stdout.strip()
     except Exception:
         return ""
+
+
+def human_bytes(v):
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return "\u2014"
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f}{unit}" if unit in ("B", "KB") else f"{n:.1f}{unit}"
+        n /= 1024
 
 
 def sample():
