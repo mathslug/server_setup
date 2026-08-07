@@ -112,6 +112,12 @@ backup_app() {
   appconf_load "$APP"
   mkdir -p "${RUN}/${APP}"
 
+  # Not every app has a database. AvaLong keeps its whole state in an in-memory
+  # dict, so an empty BACKUP_DB says "nothing to snapshot" explicitly rather
+  # than this script assuming SQLite because the first two apps happened to use
+  # it. Everything below that is not database-specific still runs.
+  if [ -n "${BACKUP_DB:-}" ]; then
+
   # 1. Consistent snapshot of the live database, taken on the Pi inside the
   #    app's own container so it sees the same file the app has open. The
   #    command comes from the app's conf because it has to run in the app's
@@ -131,6 +137,7 @@ backup_app() {
     > "${RUN}/${APP}/${BACKUP_DB}.gz" || { app_fail "${APP}: could not retrieve snapshot"; return 1; }
   ssh -o BatchMode=yes "$PI" "sudo rm -f ${DATA_DIR}/.backup.db"
   [ -s "${RUN}/${APP}/${BACKUP_DB}.gz" ] || { app_fail "${APP}: snapshot came back empty"; return 1; }
+  fi
 
   # 3. Any state that is not in the database. --link-dest makes unchanged files
   #    hardlinks against yesterday's run: a new dated snapshot that costs almost
@@ -152,11 +159,17 @@ backup_app() {
   chmod 600 "${RUN}/${APP}/env"
   [ -s "${RUN}/${APP}/env" ] || { app_fail "${APP}: env file came back empty"; return 1; }
 
-  # 4. Verify. Fail loudly rather than keeping a file that only looks like a
-  #    backup. Decompressed to a scratch file first: sqlite needs a real file,
-  #    and checking the compressed copy we actually keep is the whole point —
-  #    verifying the Pi's original would prove nothing about what arrived here.
-  #    python3 rather than each app's own runtime, so there is one verifier.
+  # 4. Verify — the compressed copy that was actually kept, not the Pi's
+  #    original, which would prove nothing about what arrived here. Fail rather
+  #    than keep a file that only looks like a backup. Decompressed to a scratch
+  #    file first because sqlite needs a real one. python3 rather than each
+  #    app's own runtime, so there is one verifier for every app.
+  if [ -z "${BACKUP_DB:-}" ]; then
+    log "${APP}: ok — no database; env and ${FILES} file(s)"
+    log "${APP}: size=$(du -sh "${RUN}/${APP}" | cut -f1)"
+    return 0
+  fi
+
   TMPDB=$(mktemp "${TMPDIR:-/tmp}/pi-backup-verify.XXXXXX")
   gunzip -c "${RUN}/${APP}/${BACKUP_DB}.gz" > "$TMPDB" \
     || { rm -f "$TMPDB"; app_fail "${APP}: snapshot will not decompress"; return 1; }

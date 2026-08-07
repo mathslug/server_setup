@@ -177,6 +177,20 @@ fi
 asuser systemctl --user restart "${SERVICE}.service"
 ok "$(asuser systemctl --user is-active "${SERVICE}.service") — ${SERVICE}.service"
 
+# Auto-deploy. A SYSTEM timer, unlike the app's own units, because it runs this
+# script as root.
+#
+# Enabled here rather than left as a step to remember: karb's was enabled by
+# hand and appeared in no script and no document, so the next app would have
+# deployed cleanly and then silently never picked up another commit — the
+# failure being the absence of something, which nothing was watching for.
+if [ -f /etc/systemd/system/autodeploy@.timer ]; then
+  sudo systemctl enable --now "autodeploy@${APP}.timer" >/dev/null 2>&1
+  ok "autodeploy@${APP}.timer — $(systemctl is-active "autodeploy@${APP}.timer")"
+else
+  echo "   NOTE: autodeploy@.timer is not installed; run systemd/install-units.sh"
+fi
+
 # ---------------------------------------------------------------------------
 say "Health"
 # ---------------------------------------------------------------------------

@@ -1,0 +1,75 @@
+# Template for a new app. Copy to apps/<name>.conf and fill in.
+#
+#     cp apps/EXAMPLE.conf.template apps/myapp.conf
+#
+# Named .template so appconf_list() — which globs apps/*.conf — does not pick
+# it up and try to deploy, back up and monitor an app that does not exist.
+#
+# This one file is the whole registration. The deploy, the auto-deploy timer,
+# the nightly backup, the health dashboard and the Cloudflare tunnel ingress
+# all read it, so there is no second place to remember.
+
+# ── Source ──────────────────────────────────────────────────────────────────
+# Use the git@github.com: form for a PRIVATE repo — deploy-app.sh will generate
+# a per-app key and print it with the URL to register it. Use https:// for a
+# public one, which needs no credential at all and is one less thing to restore
+# after a card wipe.
+REPO="https://github.com/mathslug/CHANGEME.git"
+BRANCH="main"
+
+# ── Container ───────────────────────────────────────────────────────────────
+# Quadlet unit, relative to the repo root. Installed to
+# ~/.config/containers/systemd/ and turned into a service by systemd's
+# podman-user-generator.
+QUADLET="deploy/CHANGEME.container"
+
+IMAGE="CHANGEME"
+SERVICE="CHANGEME"        # must match ContainerName= in the Quadlet unit
+
+# Subdirectory of ~podsvc/data, bind-mounted into the container. Never touched
+# by a deploy. Set it even if the app has no state today.
+DATA_SUBDIR="CHANGEME"
+
+# ── Public ──────────────────────────────────────────────────────────────────
+# HOSTNAME and LOCAL_PORT generate the tunnel ingress rule. HEALTH_PATH must be
+# CHEAP — the dashboard polls it every 5 minutes and the container health check
+# every 30 seconds. Do not point it at a page that runs real queries.
+HOSTNAME="CHANGEME.mathslug.com"
+LOCAL_PORT=8000
+HEALTH_PATH="/healthz"
+
+# ── Backup ──────────────────────────────────────────────────────────────────
+# BACKUP_DB is the database file inside DATA_SUBDIR, and BACKUP_SNAPSHOT_CMD
+# writes a consistent copy of it to /data/.backup.db from INSIDE the container.
+# That command runs in the app's own runtime, so it is `node …` for a Node app
+# and `python …` for a Python one, and the script lives in the app's repo.
+#
+# LEAVE BACKUP_DB EMPTY IF THE APP HAS NO DATABASE. AvaLong keeps its whole
+# state in memory; an empty value says so, and the backup skips the snapshot
+# instead of failing every night.
+#
+# Put the snapshot script at the REPO ROOT unless you are sure .containerignore
+# does not exclude deploy/ — whorl's does, and the file was silently missing
+# from the image. deploy-app.sh now checks this at deploy time.
+BACKUP_DB=""
+BACKUP_SNAPSHOT_CMD=""
+# Directories under DATA_SUBDIR to copy verbatim, space separated. Uploads and
+# anything else not in the database.
+BACKUP_DIRS=""
+
+# ── Scheduled work (optional) ───────────────────────────────────────────────
+# Only if the app ships timers. UNITS_DIR is a directory of plain systemd user
+# units in the app's repo; deploy-app.sh installs them and enables any .timer.
+#
+# JOB_RECEIPTS is what the dashboard watches: "job:maxage", where each job
+# writes /var/lib/rpi-health/jobs/<app>.<job> after a clean run. Without this,
+# a job that silently stops running is invisible — the app keeps serving and
+# every check stays green.
+#UNITS_DIR="deploy/units"
+#JOB_RECEIPTS="daily:26h hourly:3h"
+
+# ── Secrets ─────────────────────────────────────────────────────────────────
+# Written to ~/.config/<app>.env on first deploy if absent, then never touched
+# again. Real values go in by hand: this file is in git, that one is not.
+ENV_TEMPLATE="EXAMPLE_KEY=
+EXAMPLE_OTHER="

@@ -24,9 +24,37 @@ PLAN.md             the migration this is part of, and why
 
 ## Adding an app
 
-Write `apps/<name>.conf` and run `sudo /opt/rpi/deploy-app.sh <name>`. Backups,
-the dashboard and the tunnel ingress all read that file, so there is no second
-place to register anything.
+Start from `apps/EXAMPLE.conf.template`, which documents every field. That one
+file is the whole registration — the deploy, the auto-deploy timer, the nightly
+backup, the dashboard and the tunnel ingress all read it.
+
+**In the app's own repo** (this half is easy to forget, because none of it
+lives here):
+
+- `Containerfile` — built **on the Pi**, so architecture is a non-issue
+- A health endpoint that is genuinely cheap; it is polled every 30s
+- `healthcheck.<ext>` — a *script*, never an inline `command -c "…"` in the
+  Quadlet unit. Quadlet's parser does not survive nested quotes and truncates
+  silently, leaving a container permanently "unhealthy" while the app is fine
+- `snapshot.<ext>` at the **repo root** — only if the app has a database. Not
+  in `deploy/`, which `.containerignore` may exclude; that bug cost a night of
+  backups. `deploy-app.sh` now checks the image really contains it
+- `deploy/<name>.container` — the Quadlet unit
+
+**Then**, in order:
+
+```
+# 1. Access policy first, if it should not be public
+# 2. Deploy — clones, builds, runs tests if the image does, installs units,
+#    enables autodeploy@<name>.timer, health-checks
+sudo /opt/rpi/deploy-app.sh <name>
+
+# 3. Real secrets into ~podsvc/.config/<name>.env, then restart
+
+# 4. DNS last
+sudo /opt/rpi/cloudflared/render-config.sh
+sudo cloudflared tunnel route dns mypi <hostname>
+```
 
 Two things are worth deciding rather than copying from the app next door.
 
