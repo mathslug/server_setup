@@ -1,0 +1,15 @@
+# Daily is deliberate. Application code gets a 15-minute poll because that is
+# what you iterate on; the infrastructure scripts change rarely and a bad one
+# has a wider blast radius, so they land slowly enough to notice.
+
+[Unit]
+Description=Daily update of /opt/rpi from git
+
+[Timer]
+OnBootSec=10min
+OnCalendar=daily
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

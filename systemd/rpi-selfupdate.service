@@ -1,0 +1,19 @@
+# Keep /opt/rpi in sync with the repo.
+#
+# Deliberately separate from autodeploy@.service rather than folded into it:
+# a script that git-pulls its own directory while running is a good way to
+# execute half of one version and half of another.
+#
+# Only updates the scripts on disk. Nothing is executed as a result — the
+# timers pick up the new versions on their next run.
+
+[Unit]
+Description=Update /opt/rpi from git
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/git -C /opt/rpi fetch --quiet origin main
+ExecStart=/usr/bin/git -C /opt/rpi reset --quiet --hard origin/main
+TimeoutStartSec=5min

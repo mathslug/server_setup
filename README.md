@@ -22,13 +22,21 @@ PLAN.md             the migration this is part of, and why
 ## Automatic deploys
 
 GitHub Actions cannot reach the Pi — the tunnel only carries inbound traffic
-for the apps, and nothing else connects in. So deploys are *pulled*, not pushed:
+for the apps, and nothing else connects in. So deploys are *pulled*, not pushed.
+
+This repo is itself cloned to `/opt/rpi` on the Pi:
 
 ```
-sudo mkdir -p /opt/rpi/apps
-# copy deploy-app.sh, auto-deploy.sh and apps/*.conf into /opt/rpi
-# copy systemd/autodeploy@.{service,timer} into /etc/systemd/system
-sudo systemctl enable --now autodeploy@<app>.timer
+# root needs its own deploy key: GitHub requires deploy keys to be unique per
+# repository, so podsvc's key (claimed by secretBlog) cannot be reused.
+sudo ssh-keygen -t ed25519 -N "" -f /root/.ssh/id_ed25519_rpi
+# add /root/.ssh/id_ed25519_rpi.pub to this repo as a read-only deploy key
+sudo git clone git@github.com:mathslug/rpi.git /opt/rpi
+
+sudo cp /opt/rpi/systemd/*.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now rpi-selfupdate.timer      # keeps /opt/rpi current
+sudo systemctl enable --now autodeploy@<app>.timer    # one per app
 ```
 
 Every 15 minutes the timer runs a single `git ls-remote` — one SSH round trip,
