@@ -279,7 +279,9 @@ def state(metric, value):
 
 
 def human_dt(seconds):
-    d, r = divmod(int(seconds), 86400)
+    # Clamped at zero: divmod floors, so a negative — from clock skew or an
+    # NTP step — came out as "-1d 23h" for what was really a few seconds.
+    d, r = divmod(max(0, int(seconds)), 86400)
     h, r = divmod(r, 3600)
     m = r // 60
     if d:

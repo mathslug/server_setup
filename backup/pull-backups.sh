@@ -269,9 +269,15 @@ fi
 # gets looked at, and this inverts the dependency usefully: the Pi ends up
 # reporting on something it neither does nor controls, so a Mac that quietly
 # stops backing up becomes visible instead of silent.
+# The timestamp is generated ON THE PI (note the escaped \$), not here. The
+# dashboard subtracts it from the Pi's clock, so writing the Mac's clock into
+# it made the age a measure of the difference between two machines. A few
+# seconds of skew the wrong way produced a NEGATIVE age, which the formatter
+# rendered as "-1d 23h ago" while the status still said green — a wrong number
+# next to a right-looking dot, which is worse than no row at all.
 ssh -o BatchMode=yes "$PI" \
   "sudo install -d -m 0755 /var/lib/rpi-health && \
-   printf '%s %s\\n' \"$(date +%s)\" \"${STAMP}\" | sudo tee /var/lib/rpi-health/last-backup >/dev/null" \
+   printf '%s %s\\n' \"\$(date +%s)\" \"${STAMP}\" | sudo tee /var/lib/rpi-health/last-backup >/dev/null" \
   || log "WARNING: could not write the backup receipt to the Pi (dashboard will show this run as missed)"
 
 log "=== done — total $(du -sh "$DEST" | cut -f1) in ${DEST} ==="
