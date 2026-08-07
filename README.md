@@ -14,10 +14,55 @@ bootstrap.sh        one-time (idempotent) Pi setup — run on a fresh install
 deploy-app.sh       clone/build/start one app; re-run to update it
 auto-deploy.sh      redeploy only if the branch moved; driven by a timer
 apps/<name>.conf    per-app deployment config (repo, unit path, health URL)
+backup/             nightly pull to the Mac; snapshot, verify, prune
+monitor/            health collector + the LAN dashboard on :8080
 cloudflared/        tunnel ingress + hardened systemd unit
-systemd/            templated autodeploy@.service / .timer
+systemd/            system units, and install-units.sh which keeps
+                    /etc/systemd/system in step with this directory
 PLAN.md             the migration this is part of, and why
 ```
+
+## Adding an app
+
+Write `apps/<name>.conf` and run `sudo /opt/rpi/deploy-app.sh <name>`. Backups,
+the dashboard and the tunnel ingress all read that file, so there is no second
+place to register anything.
+
+Two things are worth deciding rather than copying from the app next door.
+
+**Sequence the conf against DNS.** The health collector starts checking
+`https://<hostname><HEALTH_PATH>` the moment the conf lands on the Pi. Add the
+conf when you cut DNS over, not before — karb's arrived three hours early and
+booked 37 samples of 404 against a hostname still pointing at the old server,
+for an outage no user experienced.
+
+**Size the memory cap to the app's largest single file, not to its process.**
+The cap in the Quadlet unit covers page cache as well as process memory, and
+the nightly backup runs `VACUUM INTO` *inside the container*, so the whole
+database passes through it.
+
+| app | data | cap | why |
+|---|---|---|---|
+| whorl | 2.9MB | 512m | process only; anything covers it |
+| karb | 702MB | 1536m | has to pass its database through the limit |
+| dashboard | none | 64m | busybox httpd |
+
+A cap is a ceiling, not a reservation, so the sum can exceed the Pi's 7.8GB and
+oversizing costs nothing. Undersizing does not crash — it silently churns.
+
+To check one is right:
+
+```
+CG=$(podman inspect <app> --format '{{.State.CgroupPath}}')
+sudo cat /sys/fs/cgroup$CG/memory.events      # max should be 0
+sudo grep -E '^(anon|file) ' /sys/fs/cgroup$CG/memory.stat
+```
+
+`max` counts times the app hit its ceiling; `oom_kill` counts times something
+died. Non-zero `max` with zero `oom_kill` is the quiet case worth catching.
+**Do not use `podman stats` MemPerc for this** — karb read a comfortable 25%
+while hitting its ceiling 852 times, because the page cache it kept losing was
+never counted in that number.
 
 ## Automatic deploys
 
