@@ -52,11 +52,26 @@ LATEST="${DEST}/latest"
 
 log() { printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 
+# A failure used to produce a line in a log file nobody opens and a non-zero
+# exit code nobody queries — which is to say, nothing. This is the immediate
+# half of the fix; the slow half is the "Last backup" row on the Pi's
+# dashboard, which catches a backup that stops running rather than one that
+# runs and fails.
+#
+# Best-effort by design: no notification daemon must ever be able to fail the
+# backup that is trying to report through it.
+notify() {
+  [ -n "${BACKUP_NO_NOTIFY:-}" ] && return 0
+  command -v osascript >/dev/null 2>&1 || return 0
+  osascript -e "display notification \"$1\" with title \"Pi backup failed\" sound name \"Basso\"" \
+    >/dev/null 2>&1 || true
+}
+
 # fail() aborts the whole run; it is for conditions that make every app
 # hopeless, like the Pi being unreachable. A single app failing must not take
 # the others down with it — that is app_fail(), which gives up on one app and
 # lets the loop continue. The run still exits non-zero at the end.
-fail() { log "FAILED: $*"; exit 1; }
+fail() { log "FAILED: $*"; notify "$*"; exit 1; }
 app_fail() { log "FAILED: $*"; return 1; }
 FAILED_APPS=""
 
@@ -224,10 +239,26 @@ prune "${DEST}/weekly" "$KEEP_WEEKLY"
 if [ -n "$FAILED_APPS" ]; then
   # The run still promoted and pruned: the apps that did succeed have a good
   # snapshot, and refusing to keep it would be worse. But the exit status is
-  # what launchd records, so this does not pass as a clean run.
+  # what launchd records, so this does not pass as a clean run — and the
+  # receipt below is deliberately NOT written, so the Pi's dashboard keeps
+  # ageing "Last backup" until every app is covered again. A partial backup
+  # must not read as a backup.
   log "=== INCOMPLETE — no backup for:${FAILED_APPS} ==="
   log "=== total $(du -sh "$DEST" | cut -f1) in ${DEST} ==="
+  notify "no backup for:${FAILED_APPS}"
   exit 1
 fi
+
+# Receipt for the Pi's dashboard. Written last, and only on a fully clean run,
+# so "Last backup: 6h ago" means every app actually has a verified snapshot.
+#
+# It lives on the Pi rather than here because the dashboard is the page that
+# gets looked at, and this inverts the dependency usefully: the Pi ends up
+# reporting on something it neither does nor controls, so a Mac that quietly
+# stops backing up becomes visible instead of silent.
+ssh -o BatchMode=yes "$PI" \
+  "sudo install -d -m 0755 /var/lib/rpi-health && \
+   printf '%s %s\\n' \"$(date +%s)\" \"${STAMP}\" | sudo tee /var/lib/rpi-health/last-backup >/dev/null" \
+  || log "WARNING: could not write the backup receipt to the Pi (dashboard will show this run as missed)"
 
 log "=== done — total $(du -sh "$DEST" | cut -f1) in ${DEST} ==="

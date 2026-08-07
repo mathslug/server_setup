@@ -154,6 +154,15 @@ sudo -u "$SERVICE_USER" mkdir -p \
   "${SVC_HOME}/data"
 ok "layout: ${SVC_HOME}/{apps,data,.config/containers/systemd}"
 
+# Persistent state for the health collector. Only holds the backup receipt the
+# Mac writes after a clean run, which the dashboard ages into a warning.
+#
+# Persistent on purpose: /run/rpi-health is tmpfs, and a receipt kept there
+# would vanish on every reboot and read as "never backed up" — a false alarm
+# that would train you to ignore the row.
+sudo install -d -m 0755 /var/lib/rpi-health
+ok "state: /var/lib/rpi-health (backup receipt)"
+
 # ---------------------------------------------------------------------------
 say "SSH known_hosts for github.com"
 # ---------------------------------------------------------------------------

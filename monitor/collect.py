@@ -27,6 +27,16 @@ from pathlib import Path
 ROOT = Path("/run/rpi-health")
 SAMPLES = ROOT / "samples.tsv"
 WWW = ROOT / "www"
+
+# Written by the Mac's pull-backups.sh after a successful run. Persistent
+# rather than under /run, so a reboot is not mistaken for a missed backup.
+BACKUP_STAMP = Path("/var/lib/rpi-health/last-backup")
+
+# Backups are daily. One missed day is a laptop that stayed shut; three is a
+# habit that has broken. The gap between those two numbers is deliberate —
+# warning early enough to notice, critical late enough to mean something.
+BACKUP_WARN_S = 30 * 3600
+BACKUP_CRIT_S = 72 * 3600
 INTERVAL_S = 300
 WINDOW_S = 24 * 3600
 HERE = Path(__file__).resolve().parent.parent
@@ -77,6 +87,26 @@ def human_bytes(v):
         if n < 1024 or unit == "GB":
             return f"{n:.0f}{unit}" if unit in ("B", "KB") else f"{n:.1f}{unit}"
         n /= 1024
+
+
+def backup_age():
+    """Seconds since the Mac last completed a backup, or None if never.
+
+    Deliberately inverted: the Pi reports on something it does not do and
+    cannot control. The backup runs on the Mac, pulls over ssh, and writes this
+    receipt at the end of a successful run — so a Mac that quietly stops
+    backing up shows up here, on the page that actually gets looked at.
+
+    Before this, a failed backup produced a line in a log file nobody opens and
+    a non-zero exit code nobody queries. Which is to say: nothing.
+
+    Persistent, not /run/rpi-health — a reboot must not read as "never backed
+    up" and raise a false alarm.
+    """
+    try:
+        return int(time.time()) - int(BACKUP_STAMP.read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
 
 
 def sample():
@@ -174,6 +204,7 @@ def sample():
         "throttled": throttled,
         "tunnel": tunnel or "unknown",
         "apps": app_state,
+        "backup_age": backup_age(),
         "uptime": int(uptime),
         "mem_mb": round((mem_total - mem_avail) / 1024),
         "mem_total_mb": round(mem_total / 1024),
@@ -267,6 +298,14 @@ def render(cur, hist):
     ] + [
         "good" if (a["unit"] == "active" and a["http"] == "200") else "critical"
         for a in cur.get("apps", {}).values()
+    ] + [
+        # A stale backup counts toward the headline. A row nobody scrolls to is
+        # only marginally better than a log nobody opens.
+        "good" if (cur.get("backup_age") is not None
+                   and cur["backup_age"] < BACKUP_WARN_S)
+        else "warning" if (cur.get("backup_age") is not None
+                           and cur["backup_age"] < BACKUP_CRIT_S)
+        else "critical"
     ]
     overall = (
         "critical" if "critical" in checks
@@ -305,7 +344,23 @@ def render(cur, hist):
                  f"{a.get('disk','—')} disk")
         app_rows.append(row(name, f"{a['unit']} · HTTP {a['http']}", usage, st))
 
+    # NOT `age` — that name is already the dashboard's own data age above, and
+    # the HTML template below renders "Updated {human_dt(age)} ago" from it.
+    # Shadowing it here made the page report the backup's age as its own
+    # freshness: a stale-looking page that was in fact seconds old, which is
+    # the exact class of confidently-wrong signal this row exists to prevent.
+    bk_age = cur.get("backup_age")
+    if bk_age is None:
+        bk_val, bk_st = "never", "critical"
+        bk_detail = "no completed backup recorded — check backups/backup.log on the Mac"
+    else:
+        bk_val = f"{human_dt(bk_age)} ago"
+        bk_st = ("good" if bk_age < BACKUP_WARN_S
+                 else "warning" if bk_age < BACKUP_CRIT_S else "critical")
+        bk_detail = "daily 06:00 pull to the Mac; needs the LAN or a live Access session"
+
     rows = "\n".join(app_rows + [
+        row("Last backup", bk_val, bk_detail, bk_st),
         row("cloudflared", cur["tunnel"], "tunnel", "good" if cur["tunnel"] == "active" else "critical"),
         row("Power / thermal", cur["throttled"],
             "0x0 is healthy; anything else means undervoltage or throttling",
@@ -440,6 +495,7 @@ def summary(cur, hist):
           f"{a.get('cpu','—')} cpu, {a.get('mem','—')} ram, {a.get('disk','—')} disk"
           for n, a in sorted(cur.get("apps", {}).items())],
         f"  tunnel  {cur['tunnel']}",
+        f"  backup  {human_dt(cur['backup_age']) + ' ago' if cur.get('backup_age') is not None else 'NEVER'}",
         f"  uptime24 {ok}/{total} samples all-green",
         f"  uptime  {human_dt(cur['uptime'])}",
     ]) + "\n"
