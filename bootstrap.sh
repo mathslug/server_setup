@@ -23,10 +23,12 @@ SERVICE_UID_RANGE_START=165536
 SERVICE_UID_RANGE_SIZE=65536
 REBOOT_NEEDED=0
 SWAP_MB=""
+REPO_URL="https://github.com/mathslug/server_setup.git"
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --swap-mb) SWAP_MB="${2:?--swap-mb needs a value}"; shift 2 ;;
+    --swap-mb)  SWAP_MB="${2:?--swap-mb needs a value}"; shift 2 ;;
+    --repo-url) REPO_URL="${2:?--repo-url needs a value}"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -51,6 +53,11 @@ if [ "${VERSION_ID:-0}" -lt 13 ] 2>/dev/null; then
   ok "WARNING: Debian ${VERSION_ID} ships podman < 4.4, which has no Quadlet."
   ok "         Quadlet units in this repo will not work until you reach trixie."
 fi
+
+# A fresh image carries package lists from the day it was built, and the
+# versions they name are gone from the mirrors, so the first install 404s.
+sudo DEBIAN_FRONTEND=noninteractive apt-get -qq update
+ok "package lists updated"
 
 # ---------------------------------------------------------------------------
 say "Removing desktop / peripheral services not wanted on a server"
@@ -116,6 +123,10 @@ if [ -z "$SWAP_MB" ]; then
 elif [ "$ON_SD" = "1" ]; then
   ok "SKIPPED: root is on an SD card"
 else
+  # Not on a Lite image, and it owns both the file and its regeneration, so it
+  # is worth having rather than hand-rolling fallocate/mkswap/fstab.
+  command -v dphys-swapfile >/dev/null 2>&1 \
+    || sudo DEBIAN_FRONTEND=noninteractive apt-get -y install dphys-swapfile >/dev/null
   sudo sed -i "s/^#\?CONF_SWAPSIZE=.*/CONF_SWAPSIZE=${SWAP_MB}/" /etc/dphys-swapfile
   sudo sed -i "s/^#\?CONF_MAXSWAP=.*/CONF_MAXSWAP=${SWAP_MB}/" /etc/dphys-swapfile
   grep -q '^CONF_MAXSWAP=' /etc/dphys-swapfile \
@@ -209,6 +220,20 @@ sudo install -d -m 0755 /var/lib/rpi-health
 # account, so it must own this one.
 sudo install -d -m 0755 -o "$SERVICE_USER" -g "$SERVICE_USER" /var/lib/rpi-health/jobs
 ok "state: /var/lib/rpi-health (backup receipt, job receipts)"
+
+# ---------------------------------------------------------------------------
+say "This repo, at /opt/rpi"
+# ---------------------------------------------------------------------------
+# Everything after this point runs from /opt/rpi — deploys, the tunnel config,
+# the units. Cloning it here rather than by hand is what keeps a rebuild
+# reproducible: a step performed once over ssh is a step that does not survive
+# the next disk. Public, so no credential.
+if [ -d /opt/rpi/.git ]; then
+  ok "already present at $(sudo git -C /opt/rpi rev-parse --short HEAD)"
+else
+  sudo git clone -q "$REPO_URL" /opt/rpi
+  ok "cloned $(sudo git -C /opt/rpi rev-parse --short HEAD) from ${REPO_URL}"
+fi
 
 # ---------------------------------------------------------------------------
 say "SSH known_hosts for github.com"

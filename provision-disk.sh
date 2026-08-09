@@ -79,14 +79,28 @@ say "Identity"
 UID_N=$(id -u "$WHO"); GID_N=$(id -g "$WHO")
 HASH=$(getent shadow "$WHO" | cut -d: -f2)
 
-# Only groups the fresh image defines. The running system carries extras (spi,
-# gpio, lpadmin) and useradd rejects the whole list if one is missing.
+# The image ships a placeholder account at uid 1000 (`pi`, nologin) that first
+# boot would rename from userconf.txt. Rename it here instead — the uid, home
+# and group already exist, so this is one step rather than delete-and-recreate.
+PLACEHOLDER=$(chroot "$MNT" getent passwd "$UID_N" | cut -d: -f1 || true)
+if [ -n "$PLACEHOLDER" ] && [ "$PLACEHOLDER" != "$WHO" ]; then
+  chroot "$MNT" usermod -l "$WHO" -d "/home/${WHO}" -m "$PLACEHOLDER"
+  chroot "$MNT" groupmod -n "$WHO" "$PLACEHOLDER" 2>/dev/null || true
+  ok "renamed ${PLACEHOLDER} -> ${WHO}"
+elif [ -z "$PLACEHOLDER" ]; then
+  chroot "$MNT" useradd -u "$UID_N" -m "$WHO"
+fi
+chroot "$MNT" usermod -p "$HASH" -s /bin/bash "$WHO"
+
+# Added one at a time: the running system carries groups a Lite image may not
+# define (spi, gpio, lpadmin), and usermod -G rejects the whole list if one is
+# missing.
 GRP=""
 for g in sudo adm dialout cdrom audio video plugdev games users input netdev; do
-  chroot "$MNT" getent group "$g" >/dev/null 2>&1 && GRP="${GRP}${GRP:+,}${g}"
+  chroot "$MNT" getent group "$g" >/dev/null 2>&1 || continue
+  chroot "$MNT" gpasswd -a "$WHO" "$g" >/dev/null
+  GRP="${GRP}${GRP:+,}${g}"
 done
-chroot "$MNT" useradd -u "$UID_N" -m -s /bin/bash -G "$GRP" "$WHO"
-chroot "$MNT" usermod -p "$HASH" "$WHO"
 # bootstrap.sh and deploy-app.sh both run sudo non-interactively over ssh.
 install -m 0440 /etc/sudoers.d/010_pi-nopasswd "$MNT/etc/sudoers.d/010_pi-nopasswd"
 ok "user ${WHO} (${UID_N}), groups ${GRP}"
@@ -96,18 +110,59 @@ install -m 600 -o "$UID_N" -g "$GID_N" \
   "/home/${WHO}/.ssh/authorized_keys" "${MNT}/home/${WHO}/.ssh/authorized_keys"
 cp -a /etc/ssh/ssh_host_* "$MNT/etc/ssh/"
 touch "$MNT/boot/firmware/ssh"
-ok "ssh: authorized_keys and host keys"
+# ssh.service ships disabled; sshswitch.service enables it when that flag file
+# exists. Enable it here as well rather than trusting one mechanism, because
+# the cost of it not starting is a disk that has to be physically pulled.
+install -d "$MNT/etc/systemd/system/multi-user.target.wants"
+ln -sf /lib/systemd/system/ssh.service \
+       "$MNT/etc/systemd/system/multi-user.target.wants/ssh.service"
+ok "ssh: authorized_keys, host keys, service enabled"
 
 cp /etc/hostname /etc/hosts "$MNT/etc/"
+# Scheduled jobs pin UTC explicitly, so this only affects what logs and the
+# dashboard read like — but a machine that disagrees with itself about the time
+# is a bad thing to debug against.
+cp -a /etc/localtime "$MNT/etc/localtime"
+[ -f /etc/timezone ] && cp /etc/timezone "$MNT/etc/timezone"
 mkdir -p "$MNT/etc/NetworkManager/system-connections"
 cp -a /etc/NetworkManager/system-connections/. \
       "$MNT/etc/NetworkManager/system-connections/"
 chmod 600 "$MNT"/etc/NetworkManager/system-connections/* 2>/dev/null || true
 ok "hostname $(cat /etc/hostname), $(ls -1 /etc/NetworkManager/system-connections | tr '\n' ' ')"
 
+# A correct wifi profile is not enough. Raspberry Pi OS persists the radio as
+# rfkill-soft-blocked, and NetworkManager keeps its own WirelessEnabled flag;
+# a fresh image restores both as disabled and comes up with no network and no
+# way in. Carry the state from this machine, which is demonstrably connected.
+mkdir -p "$MNT/var/lib/systemd/rfkill" "$MNT/var/lib/NetworkManager"
+cp -a /var/lib/systemd/rfkill/. "$MNT/var/lib/systemd/rfkill/" 2>/dev/null || true
+[ -f /var/lib/NetworkManager/NetworkManager.state ] \
+  && cp -a /var/lib/NetworkManager/NetworkManager.state "$MNT/var/lib/NetworkManager/"
+ok "radio state: $(grep -h . "$MNT"/var/lib/systemd/rfkill/*wlan* 2>/dev/null | tr '\n' ' ')$(grep -h WirelessEnabled "$MNT/var/lib/NetworkManager/NetworkManager.state" 2>/dev/null)"
+
+# The first-boot wizard blocks tty1 asking for a keyboard layout and a
+# username, so the machine never finishes booting. The user already exists, so
+# there is nothing for it to ask — and left to run it renames that user and
+# replaces its home directory, taking authorized_keys with it.
+for u in userconfig.service userconf.service; do
+  [ -e "$MNT/lib/systemd/system/$u" ] || continue
+  ln -sf /dev/null "$MNT/etc/systemd/system/$u"
+  ok "masked $u"
+done
+rm -f "$MNT/etc/systemd/system/getty@tty1.service.d/autologin.conf"
+
 say "Pointing the new system at its own root"
 sed -i "s/PARTUUID=[0-9a-fA-F]\{8\}/PARTUUID=${PARTUUID}/g" \
   "$MNT/boot/firmware/cmdline.txt" "$MNT/etc/fstab"
+
+# Carry over the wireless regulatory domain, which fixes the permitted channels
+# and power. Without it the driver falls back to world-roaming, where some 5GHz
+# channels are unavailable and a network on one of them is simply invisible.
+REGDOM=$(tr ' ' '\n' < /boot/firmware/cmdline.txt | grep '^cfg80211.ieee80211_regdom=' || true)
+if [ -n "$REGDOM" ] && ! grep -q 'ieee80211_regdom' "$MNT/boot/firmware/cmdline.txt"; then
+  sed -i "1 s|\$| ${REGDOM}|" "$MNT/boot/firmware/cmdline.txt"
+  ok "$REGDOM"
+fi
 # The image resizes and applies userconf on first boot. Both are already done
 # here, and leaving it in means one more thing that can behave unexpectedly.
 sed -i 's#init=/usr/lib/raspberrypi-sys-mods/firstboot ##' "$MNT/boot/firmware/cmdline.txt"
@@ -118,6 +173,18 @@ say "Verifying"
 chroot "$MNT" id "$WHO" >/dev/null            || die "user was not created"
 ls "$MNT"/etc/ssh/ssh_host_*_key >/dev/null   || die "host keys did not land"
 grep -q "PARTUUID=${PARTUUID}" "$MNT/etc/fstab" || die "fstab was not rewritten"
+# Everything above is recoverable by re-running. These two are not: without
+# them the machine boots with no network and no way in, and the only fix is
+# physically pulling the disk.
+ls "$MNT"/etc/NetworkManager/system-connections/*.nmconnection >/dev/null 2>&1 \
+  || die "no wifi profile — the machine would boot unreachable"
+grep -q '^0$' "$MNT"/var/lib/systemd/rfkill/*wlan 2>/dev/null \
+  || die "wifi would come up rfkill-blocked"
+grep -q 'WirelessEnabled=true' "$MNT/var/lib/NetworkManager/NetworkManager.state" 2>/dev/null \
+  || die "NetworkManager would come up with wifi disabled"
+[ -e "$MNT/etc/systemd/system/userconfig.service" ] \
+  || [ ! -e "$MNT/lib/systemd/system/userconfig.service" ] \
+  || die "the first-boot wizard is not masked and would block the console"
 ok "ok"
 
 sync

@@ -199,8 +199,7 @@ ssh mypi sudo reboot
 Then, once it answers again — same ssh host key, so no prompt:
 
 ```
-ssh mypi 'bash -s -- --swap-mb 8192' < bootstrap.sh
-ssh mypi 'sudo git clone https://github.com/mathslug/server_setup.git /opt/rpi'
+ssh mypi 'bash -s -- --swap-mb 8192' < bootstrap.sh   # also clones /opt/rpi
 ./backup/restore.sh host                        # tunnel back up
 ssh mypi 'sudo /opt/rpi/deploy-app.sh <app>'    # once per app
 ./backup/restore.sh                             # all app state
