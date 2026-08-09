@@ -248,15 +248,24 @@ the Pi runs trixie — Debian 12 pins podman at 4.3.
 containers with it. With it, plus `WantedBy=default.target` in each unit,
 containers start at boot with no login. `Restart=always` covers crashes.
 
-**Logs live in RAM.** journald is `Storage=volatile`. On comparable servers
-logging accounted for most of ~1GB/day of disk writes, which is the dominant
-wear source on an SD card. The tradeoff is that logs do not survive a reboot.
+**Logs live in RAM only on an SD card.** journald is `Storage=volatile` when
+root is on `mmcblk`, because logging is the dominant source of writes (~1GB/day)
+and that is what wears a card out. Anywhere else it is persistent and capped at
+2G — a post-mortem needs the logs from before the reboot that lost them, which
+is exactly what a volatile journal destroys.
 
 **The memory cgroup needs enabling on a Pi.** The firmware prepends
 `cgroup_disable=memory` to the kernel command line — it is not in `cmdline.txt`
-and is not a Debian default. Without the override in `bootstrap.sh`, container
-memory limits are accepted and silently ignored. `/proc/cmdline` is the truth
-here; `/boot/firmware/cmdline.txt` is only an intention until you reboot.
+and is not a Debian default. Without the override in `remote/setup.sh`,
+container memory limits are accepted and silently ignored, and it takes a reboot
+to apply. `/proc/cmdline` is the truth here; `/boot/firmware/cmdline.txt` is
+only an intention until you reboot.
+
+**A fresh image will not reach the network on its own.** Three things stop it,
+none visible until it is booted: the first-boot wizard blocks the console
+waiting for a keyboard layout, the wifi radio is persisted as rfkill-blocked,
+and NetworkManager keeps a separate `WirelessEnabled` flag. `remote/provision-disk.sh`
+handles all three and verifies them before the disk is trusted.
 
 **Images are built on the Pi.** `sharp`, `better-sqlite3` and friends ship
 per-architecture binaries, so a cross-built image would not run.

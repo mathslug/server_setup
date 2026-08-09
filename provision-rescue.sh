@@ -24,9 +24,12 @@ set -euo pipefail
 HOST="${1:?usage: $0 <host> <disk> <image-url> [credentials-dir]}"
 DISK="${2:?usage: $0 <host> <disk> <image-url> [credentials-dir]}"
 IMG_URL="${3:?usage: $0 <host> <disk> <image-url> [credentials-dir]}"
-CREDS="${4:-/etc/cloudflared}"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# From the backup rather than off the running Pi: cloudflared keeps cert.pem in
+# /root/.cloudflared and the tunnel credentials in /etc/cloudflared, and the
+# backup is the one place all of it sits together.
+CREDS="${4:-${HERE}/backups/latest/host/cloudflared}"
 TOOLS="${RESCUE_TOOLS:-parted fdisk e2fsprogs xz-utils curl git rsync smartmontools tmux}"
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
@@ -34,14 +37,17 @@ die() { printf '\nprovision-rescue: %s\n' "$*" >&2; exit 1; }
 
 ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST" true 2>/dev/null \
   || die "cannot reach ${HOST} over ssh"
-ssh "$HOST" "sudo test -f ${CREDS}/cert.pem" \
-  || die "no tunnel credentials at ${CREDS} on ${HOST}"
+[ -f "${CREDS}/cert.pem" ] || die "no cert.pem in ${CREDS}"
+ls "${CREDS}"/*.json >/dev/null 2>&1 || die "no tunnel credentials (*.json) in ${CREDS}"
 
 say "Imaging ${DISK} on ${HOST}"
 ssh "$HOST" "sudo bash -s -- ${DISK} ${IMG_URL}" < "${HERE}/remote/provision-disk.sh"
 
+ssh "$HOST" 'rm -rf /tmp/cf-rescue && mkdir -p /tmp/cf-rescue'
+scp -q "${CREDS}"/* "${HOST}:/tmp/cf-rescue/"
+
 say "Adding cloudflared and rescue tooling"
-ssh "$HOST" "sudo bash -s -- ${DISK} ${CREDS} '${TOOLS}'" <<'REMOTE'
+ssh "$HOST" "sudo bash -s -- ${DISK} /tmp/cf-rescue '${TOOLS}'" <<'REMOTE'
 set -euo pipefail
 DISK="$1"; CREDS="$2"; TOOLS="$3"
 MNT=/mnt/rescue
@@ -79,6 +85,7 @@ cp "$CREDS"/cert.pem "$CREDS"/*.json "$MNT/tmp/cf/"
 chroot "$MNT" /opt/rpi/cloudflared/install.sh /tmp/cf | sed 's/^/   /'
 rm -rf "$MNT/tmp/cf"
 REMOTE
+ssh "$HOST" 'rm -rf /tmp/cf-rescue'
 
 say "${DISK} is a bootable rescue card"
 echo "   Full desktop image, ssh, and cloudflared on the same tunnel."
