@@ -33,30 +33,20 @@ desktop leftovers, and generates a new ssh key for `podsvc`.
 
 ## 3. Deploy keys
 
-The old keys died with the card, so GitHub still lists them and they are now
-useless. Delete them and add the new ones.
+Only for **private app** repos — this one is public and clones with no
+credential. The old keys died with the disk, so GitHub still lists them and
+they no longer work. `deploy-app.sh` generates and prints the new one.
 
 ```
-# podsvc's key, printed at the end of bootstrap.sh
 gh repo deploy-key list --repo mathslug/secretBlog     # note the stale id
 gh repo deploy-key delete <id> --repo mathslug/secretBlog
 gh repo deploy-key add <podsvc pubkey> --repo mathslug/secretBlog --title "podsvc@mypi"
-
-# root needs its OWN key: GitHub requires deploy keys to be unique per repo
-ssh mypi 'sudo ssh-keygen -t ed25519 -N "" -f /root/.ssh/id_ed25519_rpi'
-gh repo deploy-key delete <stale id> --repo mathslug/rpi
-gh repo deploy-key add <root pubkey> --repo mathslug/rpi --title "mypi root"
 ```
 
 ## 4. This repo, onto the Pi
 
 ```
-ssh mypi 'sudo sh -c "
-  printf \"Host github.com\n  IdentityFile /root/.ssh/id_ed25519_rpi\n  IdentitiesOnly yes\n\" > /root/.ssh/config
-  chmod 600 /root/.ssh/config
-  ssh-keyscan -H github.com >> /root/.ssh/known_hosts
-  git clone git@github.com:mathslug/rpi.git /opt/rpi
-"'
+ssh mypi 'sudo git clone https://github.com/mathslug/server_setup.git /opt/rpi'
 ```
 
 ## 5. Restore the tunnel

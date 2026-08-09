@@ -149,14 +149,11 @@ for the apps, and nothing else connects in. So deploys are *pulled*, not pushed.
 This repo is itself cloned to `/opt/rpi` on the Pi:
 
 ```
-# root needs its own deploy key: GitHub requires deploy keys to be unique per
-# repository, so podsvc's key (claimed by secretBlog) cannot be reused.
-sudo ssh-keygen -t ed25519 -N "" -f /root/.ssh/id_ed25519_rpi
-# add /root/.ssh/id_ed25519_rpi.pub to this repo as a read-only deploy key
-sudo git clone git@github.com:mathslug/rpi.git /opt/rpi
+# Public, so no deploy key. Private app repos still need one each — GitHub
+# refuses the same public key on a second repository.
+sudo git clone https://github.com/mathslug/server_setup.git /opt/rpi
 
-sudo cp /opt/rpi/systemd/*.{service,timer} /etc/systemd/system/
-sudo systemctl daemon-reload
+sudo /opt/rpi/systemd/install-units.sh
 sudo systemctl enable --now rpi-selfupdate.timer      # keeps /opt/rpi current
 sudo systemctl enable --now autodeploy@<app>.timer    # one per app
 ```
