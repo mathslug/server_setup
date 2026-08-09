@@ -4,10 +4,11 @@
 # user, alongside the app containers.
 #
 # Unlike the apps, this binds 0.0.0.0 rather than loopback — the whole point is
-# reaching it from a phone on the same network. It is NOT routed through the
-# Cloudflare tunnel, so it is not reachable from the internet. If you ever want
-# it remotely, add an ingress rule and put Cloudflare Access in front; do not
-# simply expose it.
+# reaching it from a phone on the same network.
+#
+# It is ALSO reachable at mypi.mathslug.com through the tunnel (see
+# cloudflared/host-ingress.conf). It has no login of its own, so the Cloudflare
+# Access policy in front of that hostname is the only thing protecting it.
 #
 # Read-only mount: this container serves files and has no business writing any.
 

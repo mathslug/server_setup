@@ -236,6 +236,22 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+say "Health dashboard"
+# ---------------------------------------------------------------------------
+# Platform furniture rather than an app, so deploy-app.sh does not install it.
+# Until this existed it was placed by hand, which meant the collector kept
+# writing pages after a rebuild and nothing served them.
+SVC_UID=$(id -u "$SERVICE_USER")
+sudo install -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0644 \
+  /opt/rpi/monitor/dashboard.container \
+  "${SVC_HOME}/.config/containers/systemd/dashboard.container"
+sudo -u "$SERVICE_USER" env HOME="$SVC_HOME" \
+  XDG_RUNTIME_DIR="/run/user/${SVC_UID}" \
+  DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${SVC_UID}/bus" \
+  sh -c 'systemctl --user daemon-reload && systemctl --user start dashboard.service'
+ok "dashboard: $(sudo -u "$SERVICE_USER" env XDG_RUNTIME_DIR="/run/user/${SVC_UID}" systemctl --user is-active dashboard.service)"
+
+# ---------------------------------------------------------------------------
 say "SSH known_hosts for github.com"
 # ---------------------------------------------------------------------------
 # Deploy keys are NOT generated here — GitHub refuses the same public key on a
