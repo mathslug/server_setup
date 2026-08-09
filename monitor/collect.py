@@ -4,8 +4,7 @@ Sample the Pi's health, append to a rolling 24h history, and render a static
 dashboard.
 
 Run from a systemd timer every 5 minutes. Everything lives in /run (tmpfs), so
-this writes nothing to the SD card — which matters, because 288 samples a day
-of anything is exactly the kind of steady small write that wears a card out.
+288 samples a day write nothing to the SD card.
 
 Outputs, all in /run/rpi-health:
     samples.tsv      rolling history, newest last, capped at 24h
@@ -43,12 +42,10 @@ HERE = Path(__file__).resolve().parent.parent
 
 
 def apps():
-    """Discover apps from apps/*.conf — the same source of truth the deploy and
-    backup scripts use, so a new app appears on the dashboard automatically.
+    """Discover apps from apps/*.conf, so a new app appears here automatically.
 
-    The confs are shell, so they are read by sourcing them in a subshell rather
-    than parsed here: that handles quoting and the multi-line ENV_TEMPLATE
-    correctly instead of approximately.
+    The confs are shell and are read by sourcing them in a subshell rather than
+    parsed here, which handles quoting and the multi-line ENV_TEMPLATE exactly.
     """
     out = []
     for conf in sorted((HERE / "apps").glob("*.conf")):
@@ -76,11 +73,9 @@ _DUR = {"m": 60, "h": 3600, "d": 86400}
 def job_ages(app, spec):
     """{job: seconds since its last clean run, or None} for one app's jobs.
 
-    Reads the receipts the jobs write themselves rather than asking systemd.
-    systemd is the tempting source and the wrong one: a unit that has never run
-    reports Result=success with no timestamp, and user unit state resets on
-    reboot — so on a machine designed to survive power cuts, every cut would
-    erase the evidence and then claim success.
+    Reads the receipts the jobs write themselves, not systemd: a unit that has
+    never run reports Result=success with no timestamp, and user unit state
+    resets on reboot, so a power cut would erase the evidence and claim success.
     """
     out = {}
     for item in (spec or "").split():
@@ -137,16 +132,10 @@ def job_state(j):
 def backup_age():
     """Seconds since the Mac last completed a backup, or None if never.
 
-    Deliberately inverted: the Pi reports on something it does not do and
-    cannot control. The backup runs on the Mac, pulls over ssh, and writes this
-    receipt at the end of a successful run — so a Mac that quietly stops
-    backing up shows up here, on the page that actually gets looked at.
+    The backup runs on the Mac and writes this receipt over ssh at the end of a
+    successful run, so a Mac that quietly stops backing up shows up here.
 
-    Before this, a failed backup produced a line in a log file nobody opens and
-    a non-zero exit code nobody queries. Which is to say: nothing.
-
-    Persistent, not /run/rpi-health — a reboot must not read as "never backed
-    up" and raise a false alarm.
+    Read from /var/lib, not /run — a reboot must not read as "never backed up".
     """
     try:
         return int(time.time()) - int(BACKUP_STAMP.read_text().split()[0])

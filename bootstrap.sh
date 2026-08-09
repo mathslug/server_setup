@@ -60,9 +60,8 @@ done
 # ---------------------------------------------------------------------------
 say "Logging to RAM (SD card wear)"
 # ---------------------------------------------------------------------------
-# Measured on comparable servers: ~1GB/day of writes, overwhelmingly journald
-# and system churn rather than application data. On an SD card that is the
-# dominant wear source, so the journal lives in tmpfs and is lost on reboot.
+# Journald is the dominant source of SD card writes (~1GB/day), so the journal
+# lives in tmpfs. Logs do not survive a reboot.
 sudo mkdir -p /etc/systemd/journald.conf.d
 sudo tee /etc/systemd/journald.conf.d/00-volatile.conf >/dev/null <<'EOF'
 [Journal]
@@ -91,10 +90,9 @@ ok "enabled"
 # ---------------------------------------------------------------------------
 say "Memory cgroup controller"
 # ---------------------------------------------------------------------------
-# The Raspberry Pi *firmware* prepends cgroup_disable=memory to the kernel
-# command line — it is not in cmdline.txt and not a Debian default. Without
-# overriding it, container memory limits are silently ignored. A later
-# parameter wins, so appending cgroup_enable=memory is sufficient.
+# The Pi firmware prepends cgroup_disable=memory to the kernel command line — it
+# is not in cmdline.txt. Without overriding it, container memory limits are
+# silently ignored. A later parameter wins, so appending is sufficient.
 CMDLINE=/boot/firmware/cmdline.txt
 [ -f "$CMDLINE" ] || CMDLINE=/boot/cmdline.txt
 if grep -q "cgroup_enable=memory" "$CMDLINE" 2>/dev/null; then
@@ -123,9 +121,8 @@ ok "podman $(podman --version | awk '{print $3}')"
 # ---------------------------------------------------------------------------
 say "Service account: ${SERVICE_USER}"
 # ---------------------------------------------------------------------------
-# Deliberately has no sudo and no password. Under rootless podman a container's
-# uid 0 maps to this account, so a container escape lands on a user that cannot
-# escalate — which would not be true if containers ran as the admin user.
+# No sudo, no password. Under rootless podman a container's uid 0 maps to this
+# account, so a container escape lands on a user that cannot escalate.
 if id "$SERVICE_USER" >/dev/null 2>&1; then
   ok "exists"
 else
@@ -154,32 +151,21 @@ sudo -u "$SERVICE_USER" mkdir -p \
   "${SVC_HOME}/data"
 ok "layout: ${SVC_HOME}/{apps,data,.config/containers/systemd}"
 
-# Persistent state for the health collector. Only holds the backup receipt the
-# Mac writes after a clean run, which the dashboard ages into a warning.
-#
-# Persistent on purpose: /run/rpi-health is tmpfs, and a receipt kept there
-# would vanish on every reboot and read as "never backed up" — a false alarm
-# that would train you to ignore the row.
+# Health-collector state: the backup receipt the Mac writes, and the job
+# receipts the apps write. Must be under /var/lib rather than /run, which is
+# tmpfs — a receipt there would vanish on reboot and read as "never backed up".
 sudo install -d -m 0755 /var/lib/rpi-health
-# Job receipts are written by the apps' own scheduled jobs, which run as the
-# service account, so this one it must own.
+# Job receipts come from the apps' scheduled jobs, which run as the service
+# account, so it must own this one.
 sudo install -d -m 0755 -o "$SERVICE_USER" -g "$SERVICE_USER" /var/lib/rpi-health/jobs
 ok "state: /var/lib/rpi-health (backup receipt, job receipts)"
 
 # ---------------------------------------------------------------------------
 say "SSH known_hosts for github.com"
 # ---------------------------------------------------------------------------
-# Deploy keys themselves are NOT generated here. This used to create one shared
-# key and tell you to add it to every private repo, which cannot work: GitHub
-# refuses to register the same public key as a deploy key on a second
-# repository. It went unnoticed while there was exactly one app, and would have
-# stranded the second one during a rebuild — precisely when you least want to
-# be debugging it.
-#
-# deploy-app.sh now generates ~/.ssh/id_ed25519_<app> per app and prints the
-# public key with the URL to add it to. All this needs to do is make sure
-# github.com is a known host, so the first clone does not block on a prompt no
-# one is there to answer.
+# Deploy keys are NOT generated here — GitHub refuses the same public key on a
+# second repository, so deploy-app.sh generates one per app. All this does is
+# pin github.com, so the first clone does not block on a prompt nobody answers.
 sudo -u "$SERVICE_USER" mkdir -p "${SVC_HOME}/.ssh"
 sudo -u "$SERVICE_USER" chmod 700 "${SVC_HOME}/.ssh"
 sudo -u "$SERVICE_USER" ssh-keyscan -H github.com 2>/dev/null \

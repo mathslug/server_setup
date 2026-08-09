@@ -3,14 +3,12 @@
 # render-config.sh — generate /etc/cloudflared/config.yml from apps/*.conf and
 # cloudflared/host-ingress.conf.
 #
-# Previously the ingress list was hand-maintained, which meant adding an app
-# was an edit in two places and the deployed file could silently drift from
-# the repo. Now it is derived: each app's HOSTNAME and LOCAL_PORT become one
-# ingress rule, plus whatever host-ingress.conf lists for the Pi itself.
+# Each app's HOSTNAME and LOCAL_PORT become one ingress rule, plus whatever
+# host-ingress.conf lists for the Pi itself.
 #
-# The generated file is overwritten on every self-update, so hand-editing
-# /etc/cloudflared/config.yml on the Pi is not a way to add anything — it will
-# survive until the next `git pull` and then vanish.
+# The generated file is overwritten on every self-update, so editing
+# /etc/cloudflared/config.yml by hand does not add anything — it survives until
+# the next pull and then vanishes.
 #
 #     /opt/rpi/cloudflared/render-config.sh            # render, install, reload
 #     /opt/rpi/cloudflared/render-config.sh --dry-run  # print, change nothing
@@ -45,11 +43,9 @@ cat > "$TMP" <<EOF
 #     sudo /opt/rpi/cloudflared/render-config.sh
 #     sudo cloudflared tunnel route dns mypi <hostname>
 #
-# The tunnel dials OUT to Cloudflare, so nothing is exposed on the LAN, no
-# router ports are forwarded, and the dynamic residential IP is irrelevant.
-#
-# The UUID is an identifier, not a secret. The secret is the credentials file
-# it names, which stays on this host and is never committed.
+# The tunnel dials OUT to Cloudflare: no router ports are forwarded and the
+# dynamic residential IP is irrelevant. The UUID is an identifier, not a secret
+# — the secret is the credentials file it names, which never leaves this host.
 
 tunnel: ${UUID}
 credentials-file: ${CRED}
@@ -76,9 +72,8 @@ EOF
   )
 done
 
-# Services on the Pi itself, which have no app conf because they are not apps —
-# the dashboard and SSH. Sourced rather than derived: there is no LOCAL_PORT to
-# read, and SSH is not even http.
+# Services on the Pi itself — the dashboard and SSH. Listed rather than derived:
+# there is no LOCAL_PORT to read, and SSH is not http.
 HOST_INGRESS_CONF="${HERE}/cloudflared/host-ingress.conf"
 if [ -f "$HOST_INGRESS_CONF" ]; then
   # shellcheck disable=SC1090

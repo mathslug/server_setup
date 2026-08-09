@@ -2,14 +2,11 @@
 #
 # auto-deploy.sh — redeploy an app if its branch has moved.
 #
-# Run from a systemd timer. Cheap by design: the common case is a single
-# `git ls-remote` (one SSH round trip, no objects transferred, nothing written
-# to disk) followed by an exit. A rebuild only happens when the remote SHA
-# differs from what is actually deployed.
+# Run from a systemd timer. The common case is one `git ls-remote` and an exit;
+# a rebuild only happens when the remote SHA differs from what is deployed.
 #
-# GitHub Actions cannot reach this machine — the Cloudflare tunnel only carries
-# inbound traffic for the apps, and nothing else connects in. Polling is the
-# idiomatic answer for a host behind NAT, rather than exposing a webhook.
+# Polled rather than pushed because nothing can reach this machine from outside
+# — the tunnel carries inbound traffic for the apps and nothing else.
 #
 #     /opt/rpi/auto-deploy.sh whorl
 

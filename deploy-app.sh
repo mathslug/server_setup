@@ -43,13 +43,9 @@ asuser() {
 # ---------------------------------------------------------------------------
 say "Deploy key"
 # ---------------------------------------------------------------------------
-# Generated here rather than in bootstrap.sh because bootstrap runs before any
-# app exists, and each app needs its own key — GitHub will not register the
-# same public key as a deploy key on two repositories.
-#
-# Only for SSH remotes. A public repo cloned over HTTPS needs no credential at
-# all, which is one less thing to restore after a wipe, so the conf choosing an
-# https:// URL is a deliberate statement that the repo is public.
+# One key per app: GitHub will not register the same public key as a deploy key
+# on two repositories. Only for SSH remotes — an https:// URL in the conf means
+# the repo is public and needs no credential.
 case "$REPO" in
   git@*|ssh://*)
     if sudo test -f "$DEPLOY_KEY"; then
@@ -117,21 +113,15 @@ fi
 # ---------------------------------------------------------------------------
 say "Build ${IMAGE}:latest"
 # ---------------------------------------------------------------------------
-# Built natively on the target so architecture-specific dependencies (sharp,
-# better-sqlite3, esbuild) resolve for the host it will actually run on. This
-# is also what makes moving an app to an x86 droplet a non-event.
+# Built natively on the target, so architecture-specific dependencies (sharp,
+# better-sqlite3, esbuild) resolve for the host it will actually run on.
 asuser podman build --quiet -t "${IMAGE}:latest" "$CHECKOUT" >/dev/null
 ok "built $(asuser podman image inspect "${IMAGE}:latest" --format '{{.Id}}' | cut -c1-12)"
 
-# The image and the app's conf hold two facts that have to agree: the conf says
-# how to snapshot the database, and the image has to actually contain that
-# script. Nothing connected them, so when whorl's .containerignore excluded the
-# directory the snapshot script had just moved into, the only symptom was the
-# backup failing at 00:30 — hours after the deploy that broke it, in a log
-# nobody was reading.
-#
-# Checking it here costs one container start and moves the failure to the
-# deploy that caused it.
+# The conf names a snapshot script; the image has to contain it. Nothing else
+# connects the two, and .containerignore can silently exclude it. Checking here
+# costs one container start and moves the failure to the deploy that caused it,
+# rather than to that night's backup.
 if [ -n "${BACKUP_SNAPSHOT_CMD:-}" ]; then
   SNAP_SCRIPT=$(printf '%s' "$BACKUP_SNAPSHOT_CMD" | awk '{print $NF}')
   asuser podman run --rm --entrypoint "" "${IMAGE}:latest" \
@@ -149,10 +139,9 @@ say "Install unit and start"
 asuser install -m 0644 "${CHECKOUT}/${QUADLET}" \
   "${SVC_HOME}/.config/containers/systemd/$(basename "$QUADLET")"
 
-# Optional plain systemd user units shipped by the app — timers and the
-# services they drive. They live in the app's repo rather than here so that a
-# schedule change ships with the code change that motivated it, and arrives
-# through the same auto-deploy.
+# Optional systemd user units shipped by the app — timers and the services they
+# drive. They live in the app's repo so a schedule change ships with the code
+# change that motivated it.
 if [ -n "${UNITS_DIR:-}" ] && sudo test -d "${CHECKOUT}/${UNITS_DIR}"; then
   asuser mkdir -p "${SVC_HOME}/.config/systemd/user"
   for unit in $(sudo sh -c "ls -1 ${CHECKOUT}/${UNITS_DIR}"); do
@@ -164,9 +153,8 @@ fi
 
 asuser systemctl --user daemon-reload
 
-# Enable timers after the reload, so systemd sees the units just installed. A
-# timer removed from the repo is not disabled here; that is a deliberate manual
-# step, since silently stopping scheduled work is worse than leaving it.
+# After the reload, so systemd sees the units just installed. A timer removed
+# from the repo is NOT disabled here — that stays a manual step.
 if [ -n "${UNITS_DIR:-}" ] && sudo test -d "${CHECKOUT}/${UNITS_DIR}"; then
   for timer in $(sudo sh -c "ls -1 ${CHECKOUT}/${UNITS_DIR}" | grep '\.timer$' || true); do
     asuser systemctl --user enable --now "$timer" >/dev/null 2>&1
@@ -178,12 +166,8 @@ asuser systemctl --user restart "${SERVICE}.service"
 ok "$(asuser systemctl --user is-active "${SERVICE}.service") — ${SERVICE}.service"
 
 # Auto-deploy. A SYSTEM timer, unlike the app's own units, because it runs this
-# script as root.
-#
-# Enabled here rather than left as a step to remember: karb's was enabled by
-# hand and appeared in no script and no document, so the next app would have
-# deployed cleanly and then silently never picked up another commit — the
-# failure being the absence of something, which nothing was watching for.
+# script as root. Enabled here so an app cannot deploy cleanly and then silently
+# never pick up another commit.
 if [ -f /etc/systemd/system/autodeploy@.timer ]; then
   sudo systemctl enable --now "autodeploy@${APP}.timer" >/dev/null 2>&1
   ok "autodeploy@${APP}.timer — $(systemctl is-active "autodeploy@${APP}.timer")"

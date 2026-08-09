@@ -1,15 +1,13 @@
 # Shared accessors for apps/*.conf. Source this; don't execute it.
 #
-# The conf files are plain shell so they can be sourced directly, and so a
-# multi-line ENV_TEMPLATE needs no escaping. Everything that consumes them —
-# deploys, backups, the dashboard, the tunnel config — goes through here, so
-# there is exactly one definition of where an app's data and env file live.
+# The conf files are plain shell so they can be sourced directly and a
+# multi-line ENV_TEMPLATE needs no escaping. Every consumer goes through here,
+# so there is one definition of where an app's data and env file live.
 
 SERVICE_USER="${SERVICE_USER:-podsvc}"
 
 # The backup script sources this from macOS, which has no getent. The Pi's
-# layout is fixed, so falling back to the conventional path is safe and keeps
-# one definition of these paths rather than two.
+# layout is fixed, so the fallback path is safe.
 _svc_home() {
   if command -v getent >/dev/null 2>&1; then
     getent passwd "$SERVICE_USER" | cut -d: -f6
