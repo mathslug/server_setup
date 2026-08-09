@@ -5,3 +5,6 @@ backups/
 
 # Generated on the Pi by cloudflared/render-config.sh from apps/*.conf
 cloudflared/config.yml
+
+# Local working notes; not published with this repo.
+TODO.md

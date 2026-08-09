@@ -209,10 +209,16 @@ prune() {
 # rather than runs — otherwise several runs in one afternoon evict days of real
 # history. Iterating newest-first keeps the current run, so `latest` cannot be
 # left dangling.
+#
+# Only days that are OVER. Collapsing today would mean a run taken minutes ago
+# deletes the one before it, and the newer is not always the better: a restore
+# that silently produced an empty database would evict the good copy and keep
+# the broken one. That is the mirror behaviour dated snapshots exist to avoid.
 collapse_same_day() {
-  local dir="$1" d day prev=""
+  local dir="$1" d day prev="" today; today=$(date +%Y-%m-%d)
   for d in $(ls -1 "$dir" 2>/dev/null | sort -r); do
     day="${d%%_*}"
+    [ "$day" = "$today" ] && continue
     if [ "$day" = "$prev" ]; then
       rm -rf "${dir:?}/${d}" && log "pruned daily/${d} (superseded later the same day)"
     else

@@ -6,6 +6,11 @@
 #
 # Run as a user with sudo (e.g. mathslug), ON the Pi or over ssh:
 #     ssh mypi 'bash -s' < bootstrap.sh
+#     ssh mypi 'bash -s -- --swap-mb 8192' < bootstrap.sh
+#
+# Swap and log persistence depend on what root is on: an SD card gets neither,
+# because both trade card life for something this machine does not need. Pass
+# --swap-mb to size the swapfile; the default leaves it alone.
 #
 # Assumes: Raspberry Pi OS / Debian 13 (trixie) or newer, arm64.
 # On Debian 12 (bookworm) podman is 4.3, which has no Quadlet support — the
@@ -17,6 +22,20 @@ SERVICE_USER="podsvc"
 SERVICE_UID_RANGE_START=165536
 SERVICE_UID_RANGE_SIZE=65536
 REBOOT_NEEDED=0
+SWAP_MB=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --swap-mb) SWAP_MB="${2:?--swap-mb needs a value}"; shift 2 ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+# Everything that trades away disk writes is conditioned on this.
+case "$(findmnt -no SOURCE /)" in
+  /dev/mmcblk*) ON_SD=1 ;;
+  *)            ON_SD=0 ;;
+esac
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 ok()  { printf '   %s\n' "$*"; }
@@ -58,23 +77,54 @@ for svc in bluetooth.service hciuart.service; do
 done
 
 # ---------------------------------------------------------------------------
-say "Logging to RAM (SD card wear)"
+say "Journald"
 # ---------------------------------------------------------------------------
-# Journald is the dominant source of SD card writes (~1GB/day), so the journal
-# lives in tmpfs. Logs do not survive a reboot.
+# On an SD card journald is the dominant source of writes (~1GB/day) and the
+# journal lives in tmpfs, so logs do not survive a reboot. Anywhere else, keep
+# them: a post-mortem needs the logs from before the reboot that lost them.
 sudo mkdir -p /etc/systemd/journald.conf.d
-sudo tee /etc/systemd/journald.conf.d/00-volatile.conf >/dev/null <<'EOF'
+if [ "$ON_SD" = "1" ]; then
+  sudo tee /etc/systemd/journald.conf.d/00-storage.conf >/dev/null <<'EOF'
 [Journal]
 Storage=volatile
 RuntimeMaxUse=64M
 RuntimeMaxFileSize=16M
 EOF
-if [ -d /var/log/journal ]; then
   sudo rm -rf /var/log/journal
-  ok "removed persistent journal directory"
+  ok "volatile, capped at 64M (root is on an SD card)"
+else
+  sudo tee /etc/systemd/journald.conf.d/00-storage.conf >/dev/null <<'EOF'
+[Journal]
+Storage=persistent
+SystemMaxUse=2G
+MaxRetentionSec=1month
+EOF
+  sudo rm -f /etc/systemd/journald.conf.d/00-volatile.conf
+  sudo install -d -m 2755 -o root -g systemd-journal /var/log/journal
+  ok "persistent, capped at 2G for a month"
 fi
 sudo systemctl restart systemd-journald
-ok "journald: Storage=volatile, capped at 64M"
+
+# ---------------------------------------------------------------------------
+say "Swap"
+# ---------------------------------------------------------------------------
+# A safety valve, not a fix: this machine has never swapped a page. Sized past
+# about one times RAM the return is not diminishing but zero — it would thrash
+# into uselessness long before filling it. Never on an SD card.
+if [ -z "$SWAP_MB" ]; then
+  ok "unchanged (pass --swap-mb to set it)"
+elif [ "$ON_SD" = "1" ]; then
+  ok "SKIPPED: root is on an SD card"
+else
+  sudo sed -i "s/^#\?CONF_SWAPSIZE=.*/CONF_SWAPSIZE=${SWAP_MB}/" /etc/dphys-swapfile
+  sudo sed -i "s/^#\?CONF_MAXSWAP=.*/CONF_MAXSWAP=${SWAP_MB}/" /etc/dphys-swapfile
+  grep -q '^CONF_MAXSWAP=' /etc/dphys-swapfile \
+    || echo "CONF_MAXSWAP=${SWAP_MB}" | sudo tee -a /etc/dphys-swapfile >/dev/null
+  sudo dphys-swapfile swapoff >/dev/null 2>&1 || true
+  sudo dphys-swapfile setup >/dev/null
+  sudo dphys-swapfile swapon >/dev/null
+  ok "$(free -h | awk '/^Swap:/{print $2}')"
+fi
 
 # ---------------------------------------------------------------------------
 say "Unattended security upgrades"

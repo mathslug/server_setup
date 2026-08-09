@@ -10,21 +10,26 @@ from a blank card without reference to anything that was on the old one.
 ## Layout
 
 ```
+provision-disk.sh   write Raspberry Pi OS to a disk and give it this
+                    machine's identity; the disk and image are arguments
+provision-rescue.sh  the same, plus cloudflared, for the fallback card
 bootstrap.sh        one-time (idempotent) Pi setup — run on a fresh install
 deploy-app.sh       clone/build/start one app; re-run to update it
 auto-deploy.sh      redeploy only if the branch moved; driven by a timer
 apps/<name>.conf    per-app deployment config (repo, unit path, health URL)
-backup/             nightly pull to the Mac; snapshot, verify, prune
+backup/             pull-backups.sh to the Mac, restore.sh back again
 monitor/            health collector + the LAN dashboard on :8080
-cloudflared/        tunnel ingress + hardened systemd unit
+cloudflared/        tunnel ingress, install.sh, hardened systemd unit
 systemd/            system units, and install-units.sh which keeps
                     /etc/systemd/system in step with this directory
 PLAN.md             the migration this is part of, and why
-TODO.md             what is left, and what was decided against
-RECOVERY.md         rebuilding from a dead SD card
+RECOVERY.md         rebuilding from a dead disk
 SIMPLIFY.md         replacing hand-rolled parts with maintained ones,
                     and an honest account of where that is not worth it
 ```
+
+Each script does one job and takes what it operates on as an argument. There is
+no wrapper that runs them in order — the order is below.
 
 ## Adding an app
 
@@ -172,19 +177,56 @@ On the Pi itself:
   .config/containers/systemd/*.container   Quadlet units, installed by deploy-app.sh
 ```
 
-## Rebuilding from a wiped SD card
+## Rebuilding onto a new disk
 
-1. Flash Raspberry Pi OS Lite (64-bit, trixie or newer). Enable ssh and
-   preseed the wifi in Imager's settings.
-2. `ssh mypi 'bash -s' < bootstrap.sh`
-3. Add the printed deploy key to each private repo as a **read-only** deploy key.
-4. `cat apps/<app>.conf deploy-app.sh | ssh mypi 'bash -s -- <app>'` for each app.
-   (The config is prepended because a script piped over stdin cannot locate
-   its own `apps/` directory.)
-5. Restore `~/data/<app>` and `~/.config/<app>.env` from backup.
+Find the disk first and pass it in — nothing here guesses, because a guess
+would be a disk to erase.
 
-Step 5 is the only one that needs anything that isn't in version control. That
-is the point: everything else is reproducible from these scripts.
+```
+ssh mypi lsblk                    # which one is it? /dev/sda, /dev/mmcblk0 …
+
+LITE=https://downloads.raspberrypi.com/raspios_lite_arm64_latest
+FULL=https://downloads.raspberrypi.com/raspios_full_arm64_latest
+```
+
+**Back up first, while the old system is still the running one.** Once the Pi
+boots the new disk there are no containers to snapshot, and nothing to restore
+from.
+
+```
+./backup/pull-backups.sh
+ssh mypi "sudo bash -s -- /dev/sda $LITE" < provision-disk.sh
+ssh mypi sudo reboot
+```
+
+Then, once it answers again — same ssh host key, so no prompt:
+
+```
+ssh mypi 'bash -s -- --swap-mb 8192' < bootstrap.sh
+ssh mypi 'sudo git clone https://github.com/mathslug/server_setup.git /opt/rpi'
+./backup/restore.sh host                        # tunnel back up
+ssh mypi 'sudo /opt/rpi/deploy-app.sh <app>'    # once per app
+./backup/restore.sh                             # all app state
+ssh mypi 'sudo /opt/rpi/systemd/install-units.sh'
+ssh mypi 'sudo systemctl enable --now rpi-selfupdate.timer rpi-health.timer autodeploy@<app>.timer'
+```
+
+A private app repo needs its new deploy key added — `deploy-app.sh` prints it,
+and `gh repo deploy-key add` takes it from there.
+
+### The rescue card
+
+Once the primary disk is proven, give the SD card a full desktop image and
+cloudflared, so a bad day still has a way in:
+
+```
+ssh mypi "sudo /opt/rpi/provision-rescue.sh /dev/mmcblk0 $FULL /etc/cloudflared"
+```
+
+`BOOT_ORDER=0xf14` tries USB first and falls back to the card. That fallback
+fires when the primary disk is **absent or unbootable** — a disk that is
+corrupt but still presents a boot partition will hang instead, so treat this as
+a way back in rather than as automatic failover.
 
 ## Design notes
 
