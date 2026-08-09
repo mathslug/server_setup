@@ -1,275 +1,173 @@
 #!/usr/bin/env bash
 #
-# bootstrap.sh — bring a fresh Raspberry Pi OS install to the state this
-# project expects. Idempotent: safe to run repeatedly, and safe to run on a
-# machine that is already half-configured.
+# bootstrap.sh — take a freshly imaged Pi to a fully serving one.
 #
-# Run as a user with sudo (e.g. mathslug), ON the Pi or over ssh:
-#     ssh mypi 'bash -s' < bootstrap.sh
-#     ssh mypi 'bash -s -- --swap-mb 8192' < bootstrap.sh
+#     ./bootstrap.sh mypi
+#     ./bootstrap.sh mypi --swap-mb 8192
 #
-# Swap and log persistence depend on what root is on: an SD card gets neither,
-# because both trade card life for something this machine does not need. Pass
-# --swap-mb to size the swapfile; the default leaves it alone.
+# Run on the Mac, after provision-disk.sh. Idempotent: re-running against a
+# working system changes nothing and still reports green, which is what makes
+# it safe to re-run after a failure part-way through.
 #
-# Assumes: Raspberry Pi OS / Debian 13 (trixie) or newer, arm64.
-# On Debian 12 (bookworm) podman is 4.3, which has no Quadlet support — the
-# script warns but continues, since everything else still applies.
+# It wraps the tools rather than reimplementing them — remote/setup.sh,
+# deploy-app.sh, backup/restore.sh, systemd/install-units.sh — and owns the
+# ordering between them, which is the part that used to live in someone's head:
+#
+#   * the memory cgroup needs a reboot before podman limits mean anything
+#   * the tunnel comes back before the apps, so their health checks are
+#     answerable from outside
+#   * an app is deployed and THEN restored. deploy-app.sh health-checks against
+#     a database that does not exist yet, so its check is advisory until the
+#     restore has run; the check that counts is at the end of this script.
 
 set -euo pipefail
 
-SERVICE_USER="podsvc"
-SERVICE_UID_RANGE_START=165536
-SERVICE_UID_RANGE_SIZE=65536
-REBOOT_NEEDED=0
-SWAP_MB=""
-REPO_URL="https://github.com/mathslug/server_setup.git"
-
+HOST="${1:?usage: $0 <host> [--swap-mb N]}"; shift
+SWAP_ARGS=()
+VERIFY=1
+FORCE_RESTORE=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --swap-mb)  SWAP_MB="${2:?--swap-mb needs a value}"; shift 2 ;;
-    --repo-url) REPO_URL="${2:?--repo-url needs a value}"; shift 2 ;;
+    --swap-mb)       SWAP_ARGS=(--swap-mb "${2:?--swap-mb needs a value}"); shift 2 ;;
+    --no-verify)     VERIFY=0; shift ;;
+    --force-restore) FORCE_RESTORE=1; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
-# Everything that trades away disk writes is conditioned on this.
-case "$(findmnt -no SOURCE /)" in
-  /dev/mmcblk*) ON_SD=1 ;;
-  *)            ON_SD=0 ;;
-esac
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BOOT_TIMEOUT="${BOOT_TIMEOUT:-420}"
+# shellcheck disable=SC1091
+. "${HERE}/lib/appconf.sh"
 
-say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
-ok()  { printf '   %s\n' "$*"; }
+say()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
+ok()   { printf '   %s\n' "$*"; }
+warn() { printf '   WARNING: %s\n' "$*" >&2; }
+die()  { printf '\nbootstrap: %s\n' "$*" >&2; exit 1; }
 
-# ---------------------------------------------------------------------------
-say "Preflight"
-# ---------------------------------------------------------------------------
-. /etc/os-release
-ok "OS: ${PRETTY_NAME}"
-ok "Kernel: $(uname -r)  Arch: $(dpkg --print-architecture)"
+wait_for_host() {
+  local deadline=$(( $(date +%s) + BOOT_TIMEOUT ))
+  until ssh -o BatchMode=yes -o ConnectTimeout=5 "$HOST" true 2>/dev/null; do
+    [ "$(date +%s)" -lt "$deadline" ] || die "${HOST} did not come back within ${BOOT_TIMEOUT}s"
+    sleep 10
+  done
+}
 
-if [ "${VERSION_ID:-0}" -lt 13 ] 2>/dev/null; then
-  ok "WARNING: Debian ${VERSION_ID} ships podman < 4.4, which has no Quadlet."
-  ok "         Quadlet units in this repo will not work until you reach trixie."
+ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST" true 2>/dev/null \
+  || die "cannot reach ${HOST} over ssh"
+
+# --- Base system ------------------------------------------------------------
+say "Base system"
+ssh "$HOST" "bash -s -- ${SWAP_ARGS[*]}" < "${HERE}/remote/setup.sh"
+
+# Asked of the kernel rather than parsed out of the log above: the controller
+# either shows up in the running kernel or it does not.
+if ! ssh "$HOST" 'grep -q memory /sys/fs/cgroup/cgroup.controllers'; then
+  say "Rebooting for the memory cgroup"
+  ssh "$HOST" 'sudo systemctl reboot' 2>/dev/null || true
+  sleep 20
+  wait_for_host
+  ssh "$HOST" 'grep -q memory /sys/fs/cgroup/cgroup.controllers' \
+    || die "the memory cgroup is still not active after a reboot; container limits would be silently ignored"
+  ok "active"
 fi
 
-# A fresh image carries package lists from the day it was built, and the
-# versions they name are gone from the mirrors, so the first install 404s.
-sudo DEBIAN_FRONTEND=noninteractive apt-get -qq update
-ok "package lists updated"
+# --- Tunnel -----------------------------------------------------------------
+# Before the apps: their health checks are reachable from outside only once
+# this is up, and a broken tunnel is much easier to see now than later.
+say "Tunnel"
+"${HERE}/backup/restore.sh" host
+ssh "$HOST" 'systemctl is-active --quiet cloudflared' \
+  || die "cloudflared did not come up; the apps would be unreachable"
+ok "cloudflared active"
 
-# ---------------------------------------------------------------------------
-say "Removing desktop / peripheral services not wanted on a server"
-# ---------------------------------------------------------------------------
-# wayvnc in particular listens on 0.0.0.0:5900 on a stock desktop image.
-PURGE=""
-for p in realvnc-vnc-server wayvnc libneatvnc0 libvncclient1 \
-         cups cups-browsed cups-daemon cups-common modemmanager; do
-  dpkg -l "$p" 2>/dev/null | grep -q "^ii" && PURGE="$PURGE $p"
-done
-if [ -n "$PURGE" ]; then
-  sudo DEBIAN_FRONTEND=noninteractive apt-get -y purge $PURGE >/dev/null
-  sudo DEBIAN_FRONTEND=noninteractive apt-get -y autoremove --purge >/dev/null
-  ok "purged:$PURGE"
-else
-  ok "nothing to purge"
-fi
+# --- Apps -------------------------------------------------------------------
+# A private repo needs a deploy key, and podsvc's key is new on a rebuilt disk,
+# so the old one on GitHub is dead. deploy-app.sh generates the replacement and
+# exits; rotate it here and retry once. Public repos never take this path.
+rotate_deploy_key() {
+  local app="$1" owner_repo pub
+  command -v gh >/dev/null 2>&1 || { warn "gh not installed; add ${DEPLOY_KEY}.pub by hand"; return 1; }
+  owner_repo=$(printf '%s' "$REPO" | sed 's#.*[:/]\([^/]*/[^/]*\)\.git#\1#')
+  pub=$(mktemp); trap 'rm -f "$pub"' RETURN
+  ssh "$HOST" "sudo cat ${DEPLOY_KEY}.pub" > "$pub" 2>/dev/null
+  [ -s "$pub" ] || { warn "${app}: no public key at ${DEPLOY_KEY}.pub"; return 1; }
+  for id in $(gh repo deploy-key list --repo "$owner_repo" --json id -q '.[].id' 2>/dev/null); do
+    gh repo deploy-key delete "$id" --repo "$owner_repo" >/dev/null 2>&1 \
+      && ok "${app}: removed stale key ${id}"
+  done
+  gh repo deploy-key add "$pub" --repo "$owner_repo" --title "podsvc@${HOST}" >/dev/null \
+    || { warn "${app}: could not add the deploy key to ${owner_repo}"; return 1; }
+  ok "${app}: deploy key registered on ${owner_repo}"
+}
 
-for svc in bluetooth.service hciuart.service; do
-  if systemctl is-enabled "$svc" >/dev/null 2>&1; then
-    sudo systemctl disable --now "$svc" >/dev/null 2>&1 || true
-    ok "disabled $svc"
+APPS=()
+while read -r a; do APPS+=("$a"); done < <(appconf_list)
+[ ${#APPS[@]} -gt 0 ] || die "no apps configured in $(appconf_dir)"
+
+for APP in "${APPS[@]}"; do
+  say "App: ${APP}"
+  appconf_load "$APP"
+  if ! ssh "$HOST" "sudo /opt/rpi/deploy-app.sh ${APP}" 2>&1 | tail -20; then
+    case "$REPO" in
+      git@*|ssh://*)
+        rotate_deploy_key "$APP" || die "${APP}: deploy failed and the key could not be rotated"
+        ssh "$HOST" "sudo /opt/rpi/deploy-app.sh ${APP}" 2>&1 | tail -20 \
+          || warn "${APP}: deploy still reported a problem; the restore below may fix its health check"
+        ;;
+      *) warn "${APP}: deploy reported a problem; continuing to the restore" ;;
+    esac
+  fi
+  # Restore only onto an empty app. This script has to be safe to re-run
+  # against a healthy machine, and an unconditional restore would silently roll
+  # the database back to the last backup — turning a routine re-run into data
+  # loss. --force-restore is the deliberate way to overwrite live data.
+  if [ "$FORCE_RESTORE" = "1" ]; then
+    "${HERE}/backup/restore.sh" "$APP"
+  elif [ -n "${BACKUP_DB:-}" ] \
+    && ssh "$HOST" "sudo test -s ${DATA_DIR}/${BACKUP_DB}" 2>/dev/null; then
+    ok "${APP}: data already present, not restoring (--force-restore to overwrite)"
+  else
+    "${HERE}/backup/restore.sh" "$APP"
   fi
 done
 
-# ---------------------------------------------------------------------------
-say "Journald"
-# ---------------------------------------------------------------------------
-# On an SD card journald is the dominant source of writes (~1GB/day) and the
-# journal lives in tmpfs, so logs do not survive a reboot. Anywhere else, keep
-# them: a post-mortem needs the logs from before the reboot that lost them.
-sudo mkdir -p /etc/systemd/journald.conf.d
-if [ "$ON_SD" = "1" ]; then
-  sudo tee /etc/systemd/journald.conf.d/00-storage.conf >/dev/null <<'EOF'
-[Journal]
-Storage=volatile
-RuntimeMaxUse=64M
-RuntimeMaxFileSize=16M
-EOF
-  sudo rm -rf /var/log/journal
-  ok "volatile, capped at 64M (root is on an SD card)"
-else
-  sudo tee /etc/systemd/journald.conf.d/00-storage.conf >/dev/null <<'EOF'
-[Journal]
-Storage=persistent
-SystemMaxUse=2G
-MaxRetentionSec=1month
-EOF
-  sudo rm -f /etc/systemd/journald.conf.d/00-volatile.conf
-  sudo install -d -m 2755 -o root -g systemd-journal /var/log/journal
-  ok "persistent, capped at 2G for a month"
-fi
-sudo systemctl restart systemd-journald
+# --- Units and timers -------------------------------------------------------
+say "Units and timers"
+ssh "$HOST" 'sudo /opt/rpi/systemd/install-units.sh' | sed 's/^/   /'
+ssh "$HOST" "sudo systemctl enable --now rpi-selfupdate.timer rpi-health.timer" >/dev/null 2>&1
+for APP in "${APPS[@]}"; do
+  ssh "$HOST" "sudo systemctl enable --now autodeploy@${APP}.timer" >/dev/null 2>&1 \
+    && ok "autodeploy@${APP}.timer"
+done
+ok "rpi-selfupdate.timer, rpi-health.timer"
 
-# ---------------------------------------------------------------------------
-say "Swap"
-# ---------------------------------------------------------------------------
-# A safety valve, not a fix: this machine has never swapped a page. Sized past
-# about one times RAM the return is not diminishing but zero — it would thrash
-# into uselessness long before filling it. Never on an SD card.
-if [ -z "$SWAP_MB" ]; then
-  ok "unchanged (pass --swap-mb to set it)"
-elif [ "$ON_SD" = "1" ]; then
-  ok "SKIPPED: root is on an SD card"
-else
-  # Not on a Lite image, and it owns both the file and its regeneration, so it
-  # is worth having rather than hand-rolling fallocate/mkswap/fstab.
-  command -v dphys-swapfile >/dev/null 2>&1 \
-    || sudo DEBIAN_FRONTEND=noninteractive apt-get -y install dphys-swapfile >/dev/null
-  sudo sed -i "s/^#\?CONF_SWAPSIZE=.*/CONF_SWAPSIZE=${SWAP_MB}/" /etc/dphys-swapfile
-  sudo sed -i "s/^#\?CONF_MAXSWAP=.*/CONF_MAXSWAP=${SWAP_MB}/" /etc/dphys-swapfile
-  grep -q '^CONF_MAXSWAP=' /etc/dphys-swapfile \
-    || echo "CONF_MAXSWAP=${SWAP_MB}" | sudo tee -a /etc/dphys-swapfile >/dev/null
-  sudo dphys-swapfile swapoff >/dev/null 2>&1 || true
-  sudo dphys-swapfile setup >/dev/null
-  sudo dphys-swapfile swapon >/dev/null
-  ok "$(free -h | awk '/^Swap:/{print $2}')"
+# --- Verify -----------------------------------------------------------------
+say "Verify"
+FAILED=0
+for APP in "${APPS[@]}"; do
+  appconf_load "$APP"
+  CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 60 "$PUBLIC_URL" || echo 000)
+  case "$CODE" in
+    200|302) ok "${APP}: ${CODE} ${PUBLIC_URL}" ;;
+    *) warn "${APP}: ${CODE} ${PUBLIC_URL}"; FAILED=1 ;;
+  esac
+done
+
+UNITS=$(ssh "$HOST" 'systemctl --failed --no-legend --plain | wc -l' | tr -d ' ')
+[ "$UNITS" = "0" ] || { warn "${UNITS} failed system unit(s)"; FAILED=1; }
+ssh "$HOST" 'echo "   root: $(findmnt -no SOURCE /) $(df -h / | awk "NR==2{print \$2}")"
+             echo "   swap: $(free -h | awk "/^Swap:/{print \$2}")"
+             echo "   logs: $(journalctl --list-boots 2>/dev/null | wc -l) boot(s) recorded"'
+
+if [ "$VERIFY" = "1" ]; then
+  say "Row counts"
+  # The proof that the data came back, using the tool that already knows how to
+  # check it. Advisory: a rebuild that serves correctly should not be reported
+  # as failed because the Mac could not reach the Pi for a backup.
+  "${HERE}/backup/pull-backups.sh" 2>&1 | grep -E ': ok —|INCOMPLETE|FAILED' | sed 's/^/   /' \
+    || warn "the verification backup did not complete; run ./backup/pull-backups.sh by hand"
 fi
 
-# ---------------------------------------------------------------------------
-say "Unattended security upgrades"
-# ---------------------------------------------------------------------------
-sudo DEBIAN_FRONTEND=noninteractive apt-get -y install unattended-upgrades >/dev/null
-sudo tee /etc/apt/apt.conf.d/20auto-upgrades >/dev/null <<'EOF'
-APT::Periodic::Update-Package-Lists "1";
-APT::Periodic::Unattended-Upgrade "1";
-EOF
-sudo systemctl enable --now unattended-upgrades >/dev/null 2>&1 || true
-ok "enabled"
-
-# ---------------------------------------------------------------------------
-say "Memory cgroup controller"
-# ---------------------------------------------------------------------------
-# The Pi firmware prepends cgroup_disable=memory to the kernel command line — it
-# is not in cmdline.txt. Without overriding it, container memory limits are
-# silently ignored. A later parameter wins, so appending is sufficient.
-CMDLINE=/boot/firmware/cmdline.txt
-[ -f "$CMDLINE" ] || CMDLINE=/boot/cmdline.txt
-if grep -q "cgroup_enable=memory" "$CMDLINE" 2>/dev/null; then
-  ok "already present in $CMDLINE"
-else
-  sudo cp "$CMDLINE" "${CMDLINE}.bak.$(date +%Y%m%d%H%M%S)"
-  # Append to the FIRST line only — cmdline.txt is a single logical line and
-  # any parameter pushed onto a second line is silently ignored by the kernel.
-  sudo sed -i '1 s/$/ cgroup_enable=memory cgroup_memory=1/' "$CMDLINE"
-  ok "appended to $CMDLINE (backup alongside)"
-fi
-if ! grep -q memory /sys/fs/cgroup/cgroup.controllers; then
-  REBOOT_NEEDED=1
-  ok "NOT active in the running kernel — reboot required"
-else
-  ok "active: $(cat /sys/fs/cgroup/cgroup.controllers)"
-fi
-
-# ---------------------------------------------------------------------------
-say "Podman (rootless)"
-# ---------------------------------------------------------------------------
-sudo DEBIAN_FRONTEND=noninteractive apt-get -y install \
-  podman uidmap passt netavark aardvark-dns git >/dev/null
-ok "podman $(podman --version | awk '{print $3}')"
-
-# ---------------------------------------------------------------------------
-say "Service account: ${SERVICE_USER}"
-# ---------------------------------------------------------------------------
-# No sudo, no password. Under rootless podman a container's uid 0 maps to this
-# account, so a container escape lands on a user that cannot escalate.
-if id "$SERVICE_USER" >/dev/null 2>&1; then
-  ok "exists"
-else
-  sudo useradd --create-home --shell /bin/bash \
-       --comment "Podman rootless service account" "$SERVICE_USER"
-  ok "created"
-fi
-sudo passwd -l "$SERVICE_USER" >/dev/null 2>&1 || true
-
-if ! grep -q "^${SERVICE_USER}:" /etc/subuid 2>/dev/null; then
-  END=$((SERVICE_UID_RANGE_START + SERVICE_UID_RANGE_SIZE - 1))
-  sudo usermod --add-subuids "${SERVICE_UID_RANGE_START}-${END}" \
-               --add-subgids "${SERVICE_UID_RANGE_START}-${END}" "$SERVICE_USER"
-fi
-ok "subuid: $(grep "^${SERVICE_USER}:" /etc/subuid)"
-
-# Without lingering, the user manager stops at logout and takes the containers
-# with it — so nothing would come back after a power cut.
-sudo loginctl enable-linger "$SERVICE_USER"
-ok "linger: $(loginctl show-user "$SERVICE_USER" --property=Linger)"
-
-SVC_HOME=$(getent passwd "$SERVICE_USER" | cut -d: -f6)
-sudo -u "$SERVICE_USER" mkdir -p \
-  "${SVC_HOME}/.config/containers/systemd" \
-  "${SVC_HOME}/apps" \
-  "${SVC_HOME}/data"
-ok "layout: ${SVC_HOME}/{apps,data,.config/containers/systemd}"
-
-# Health-collector state: the backup receipt the Mac writes, and the job
-# receipts the apps write. Must be under /var/lib rather than /run, which is
-# tmpfs — a receipt there would vanish on reboot and read as "never backed up".
-sudo install -d -m 0755 /var/lib/rpi-health
-# Job receipts come from the apps' scheduled jobs, which run as the service
-# account, so it must own this one.
-sudo install -d -m 0755 -o "$SERVICE_USER" -g "$SERVICE_USER" /var/lib/rpi-health/jobs
-ok "state: /var/lib/rpi-health (backup receipt, job receipts)"
-
-# ---------------------------------------------------------------------------
-say "This repo, at /opt/rpi"
-# ---------------------------------------------------------------------------
-# Everything after this point runs from /opt/rpi — deploys, the tunnel config,
-# the units. Cloning it here rather than by hand is what keeps a rebuild
-# reproducible: a step performed once over ssh is a step that does not survive
-# the next disk. Public, so no credential.
-if [ -d /opt/rpi/.git ]; then
-  ok "already present at $(sudo git -C /opt/rpi rev-parse --short HEAD)"
-else
-  sudo git clone -q "$REPO_URL" /opt/rpi
-  ok "cloned $(sudo git -C /opt/rpi rev-parse --short HEAD) from ${REPO_URL}"
-fi
-
-# ---------------------------------------------------------------------------
-say "Health dashboard"
-# ---------------------------------------------------------------------------
-# Platform furniture rather than an app, so deploy-app.sh does not install it.
-# Until this existed it was placed by hand, which meant the collector kept
-# writing pages after a rebuild and nothing served them.
-SVC_UID=$(id -u "$SERVICE_USER")
-sudo install -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0644 \
-  /opt/rpi/monitor/dashboard.container \
-  "${SVC_HOME}/.config/containers/systemd/dashboard.container"
-sudo -u "$SERVICE_USER" env HOME="$SVC_HOME" \
-  XDG_RUNTIME_DIR="/run/user/${SVC_UID}" \
-  DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${SVC_UID}/bus" \
-  sh -c 'systemctl --user daemon-reload && systemctl --user start dashboard.service'
-ok "dashboard: $(sudo -u "$SERVICE_USER" env XDG_RUNTIME_DIR="/run/user/${SVC_UID}" systemctl --user is-active dashboard.service)"
-
-# ---------------------------------------------------------------------------
-say "SSH known_hosts for github.com"
-# ---------------------------------------------------------------------------
-# Deploy keys are NOT generated here — GitHub refuses the same public key on a
-# second repository, so deploy-app.sh generates one per app. All this does is
-# pin github.com, so the first clone does not block on a prompt nobody answers.
-sudo -u "$SERVICE_USER" mkdir -p "${SVC_HOME}/.ssh"
-sudo -u "$SERVICE_USER" chmod 700 "${SVC_HOME}/.ssh"
-sudo -u "$SERVICE_USER" ssh-keyscan -H github.com 2>/dev/null \
-  | sudo -u "$SERVICE_USER" tee -a "${SVC_HOME}/.ssh/known_hosts" >/dev/null
-sudo -u "$SERVICE_USER" sort -u -o "${SVC_HOME}/.ssh/known_hosts" "${SVC_HOME}/.ssh/known_hosts"
-ok "github.com pinned in ${SVC_HOME}/.ssh/known_hosts"
-
-# ---------------------------------------------------------------------------
-say "Done"
-# ---------------------------------------------------------------------------
-if [ "$REBOOT_NEEDED" = "1" ]; then
-  echo "   REBOOT REQUIRED for the memory cgroup controller: sudo reboot"
-else
-  echo "   No reboot required."
-fi
-echo "   Next: ./deploy-app.sh <app>"
+[ "$FAILED" = "0" ] || die "finished with problems above"
+say "${HOST} is serving"

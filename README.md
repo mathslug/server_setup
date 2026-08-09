@@ -9,11 +9,26 @@ from a blank card without reference to anything that was on the old one.
 
 ## Layout
 
+Four commands, all run **on the Mac**, each taking what it operates on as an
+argument. Nothing that could erase a disk has a default.
+
 ```
-provision-disk.sh   write Raspberry Pi OS to a disk and give it this
-                    machine's identity; the disk and image are arguments
-provision-rescue.sh  the same, plus cloudflared, for the fallback card
-bootstrap.sh        one-time (idempotent) Pi setup — run on a fresh install
+backup/pull-backups.sh                       pull state off the Pi
+provision-disk.sh  <host> <disk> <image>     erase, image, reboot into it
+bootstrap.sh       <host>                    everything else, end to end
+provision-rescue.sh <host> <disk> <image>    the fallback card
+```
+
+## Layout
+
+```
+provision-disk.sh   image a disk and boot it; waits, and verifies the Pi
+                    came back on the disk it was told to build
+bootstrap.sh        base system, tunnel, every app, state, units, timers,
+                    verification. Idempotent; will not restore over data
+                    that is already there
+provision-rescue.sh the same imaging, plus cloudflared and rescue tooling
+remote/             the halves that execute on the Pi, piped over ssh
 deploy-app.sh       clone/build/start one app; re-run to update it
 auto-deploy.sh      redeploy only if the branch moved; driven by a timer
 apps/<name>.conf    per-app deployment config (repo, unit path, health URL)
@@ -27,9 +42,6 @@ RECOVERY.md         rebuilding from a dead disk
 SIMPLIFY.md         replacing hand-rolled parts with maintained ones,
                     and an honest account of where that is not worth it
 ```
-
-Each script does one job and takes what it operates on as an argument. There is
-no wrapper that runs them in order — the order is below.
 
 ## Adding an app
 
@@ -192,23 +204,17 @@ from.
 
 ```
 ./backup/pull-backups.sh
-ssh mypi "sudo bash -s -- /dev/sda $LITE" < provision-disk.sh
-ssh mypi sudo reboot
+./provision-disk.sh mypi /dev/sda "$LITE"
+./bootstrap.sh      mypi --swap-mb 8192
 ```
 
-Then, once it answers again — same ssh host key, so no prompt:
+That is the whole rebuild. `provision-disk.sh` carries the machine's identity
+across — user, ssh host keys, wifi, hostname, timezone — so it comes back
+without a prompt and `bootstrap.sh` can pick it up. Deploy keys for private app
+repos are rotated with `gh` along the way.
 
-```
-ssh mypi 'bash -s -- --swap-mb 8192' < bootstrap.sh   # also clones /opt/rpi
-./backup/restore.sh host                        # tunnel back up
-ssh mypi 'sudo /opt/rpi/deploy-app.sh <app>'    # once per app
-./backup/restore.sh                             # all app state
-ssh mypi 'sudo /opt/rpi/systemd/install-units.sh'
-ssh mypi 'sudo systemctl enable --now rpi-selfupdate.timer rpi-health.timer autodeploy@<app>.timer'
-```
-
-A private app repo needs its new deploy key added — `deploy-app.sh` prints it,
-and `gh repo deploy-key add` takes it from there.
+`bootstrap.sh` is safe to re-run against a working system: it will not restore
+over data that is already there unless you pass `--force-restore`.
 
 ### The rescue card
 

@@ -2,34 +2,49 @@
 #
 # provision-rescue.sh — build the fallback boot disk.
 #
-#     sudo ./provision-rescue.sh /dev/mmcblk0 <image-url> /etc/cloudflared
+#     ./provision-rescue.sh mypi /dev/mmcblk0 \
+#       https://downloads.raspberrypi.com/raspios_full_arm64_latest
 #
-# Runs provision-disk.sh, then adds cloudflared so the card can be reached
-# remotely. Point it at the FULL Raspberry Pi OS image, not Lite: this is what
-# you boot when things are bad enough that a desktop is worth having, and the
-# card has room to spare.
+# Run on the Mac. THE TARGET DISK IS ERASED, and it is the disk you fall back
+# to, so do this only when the primary is known good.
 #
-# No podman and no apps. It exists to get you a shell, not to serve.
+# Point it at the FULL image, not Lite: this is what you boot when things are
+# bad enough that a desktop and a browser are worth having, and the card has
+# room to spare.
 #
-# BOOT_ORDER falls through to this card only when the primary disk is absent or
+# Unlike provision-disk.sh this does NOT reboot. The primary disk stays the
+# running system; the card sits there until it is needed.
+#
+# BOOT_ORDER falls through to the card only when the primary is absent or
 # unbootable. A disk that is corrupt but still presents a boot partition will
-# hang instead, so this is a convenience path rather than automatic failover.
+# hang instead, so this is a way back in rather than automatic failover.
 
 set -euo pipefail
 
-DISK="${1:?usage: $0 <disk> <image-url> <credentials-dir>}"
-IMG_URL="${2:?usage: $0 <disk> <image-url> <credentials-dir>}"
-CREDS="${3:?usage: $0 <disk> <image-url> <credentials-dir>}"
-HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-MNT=/mnt/newroot
+HOST="${1:?usage: $0 <host> <disk> <image-url> [credentials-dir]}"
+DISK="${2:?usage: $0 <host> <disk> <image-url> [credentials-dir]}"
+IMG_URL="${3:?usage: $0 <host> <disk> <image-url> [credentials-dir]}"
+CREDS="${4:-/etc/cloudflared}"
 
-die() { echo "provision-rescue: $*" >&2; exit 1; }
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TOOLS="${RESCUE_TOOLS:-parted fdisk e2fsprogs xz-utils curl git rsync smartmontools tmux}"
+
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
+die() { printf '\nprovision-rescue: %s\n' "$*" >&2; exit 1; }
 
-[ "$(id -u)" = 0 ] || die "run with sudo"
-[ -f "${CREDS}/cert.pem" ] || die "no cert.pem in ${CREDS}"
+ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST" true 2>/dev/null \
+  || die "cannot reach ${HOST} over ssh"
+ssh "$HOST" "sudo test -f ${CREDS}/cert.pem" \
+  || die "no tunnel credentials at ${CREDS} on ${HOST}"
 
-"${HERE}/provision-disk.sh" "$DISK" "$IMG_URL"
+say "Imaging ${DISK} on ${HOST}"
+ssh "$HOST" "sudo bash -s -- ${DISK} ${IMG_URL}" < "${HERE}/remote/provision-disk.sh"
+
+say "Adding cloudflared and rescue tooling"
+ssh "$HOST" "sudo bash -s -- ${DISK} ${CREDS} '${TOOLS}'" <<'REMOTE'
+set -euo pipefail
+DISK="$1"; CREDS="$2"; TOOLS="$3"
+MNT=/mnt/rescue
 
 cleanup() {
   for m in "$MNT/sys" "$MNT/proc" "$MNT/dev/pts" "$MNT/dev" "$MNT/opt/rpi" "$MNT"; do
@@ -39,24 +54,32 @@ cleanup() {
 }
 trap cleanup EXIT
 
-say "Adding cloudflared to the rescue disk"
+mkdir -p "$MNT"
 mount "${DISK}2" "$MNT"
 mount --bind /dev "$MNT/dev"
 mount --bind /dev/pts "$MNT/dev/pts"
 mount --bind /proc "$MNT/proc"
 mount --bind /sys "$MNT/sys"
 
+# Without this the chroot has no resolver, and every apt-get and curl inside it
+# fails on DNS rather than on anything informative.
+cp /etc/resolv.conf "$MNT/etc/resolv.conf"
+
+chroot "$MNT" apt-get -qq update >/dev/null
+# shellcheck disable=SC2086
+chroot "$MNT" env DEBIAN_FRONTEND=noninteractive apt-get -y -qq install $TOOLS >/dev/null
+printf '   tools: %s\n' "$TOOLS"
+
 # install.sh reads cloudflared.service from its own directory, so the repo has
 # to be visible inside the chroot at the path it will run from.
-mkdir -p "$MNT/opt/rpi" "$MNT/tmp/cfrestore"
-mount --bind "$HERE" "$MNT/opt/rpi"
-cp "$CREDS"/cert.pem "$CREDS"/*.json "$MNT/tmp/cfrestore/"
-[ -f "${CREDS}/config.yml" ] && cp "${CREDS}/config.yml" "$MNT/tmp/cfrestore/"
+mkdir -p "$MNT/opt/rpi" "$MNT/tmp/cf"
+mount --bind /opt/rpi "$MNT/opt/rpi"
+cp "$CREDS"/cert.pem "$CREDS"/*.json "$MNT/tmp/cf/"
+[ -f "${CREDS}/config.yml" ] && cp "${CREDS}/config.yml" "$MNT/tmp/cf/"
+chroot "$MNT" /opt/rpi/cloudflared/install.sh /tmp/cf | sed 's/^/   /'
+rm -rf "$MNT/tmp/cf"
+REMOTE
 
-# enable, not enable --now: there is no running system in here to start it on.
-chroot "$MNT" /opt/rpi/cloudflared/install.sh /tmp/cfrestore \
-  || die "cloudflared install failed inside the image"
-rm -rf "$MNT/tmp/cfrestore"
-
-say "Rescue disk ready on ${DISK}"
-echo "   Reachable at ssh.mathslug.com when this card is what boots."
+say "${DISK} is a bootable rescue card"
+echo "   Full desktop image, ssh, and cloudflared on the same tunnel."
+echo "   It boots only when ${HOST}'s primary disk is absent or unbootable."
