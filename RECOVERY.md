@@ -54,8 +54,35 @@ and a graphical wifi picker are worth having.
 
 `BOOT_ORDER=0xf14` prefers USB and falls back to the card **only when the
 primary disk is absent or unbootable**. A disk that is corrupt but still
-presents a boot partition will hang instead. Treat this as a way back in, not
+presents a boot partition gets chosen forever. Treat this as a way back in, not
 as automatic failover.
+
+### Getting onto the rescue card deliberately
+
+Two routes, and which one you can use depends on where you are.
+
+**Unplug the SSD and power-cycle.** Nothing to configure, nothing to undo, and
+it cannot fail in a way that leaves you worse off. Use this whenever you can
+reach the machine.
+
+**Or change the boot order over ssh**, for when you cannot:
+
+```
+./boot-order.sh mypi              # what is it set to now?
+./boot-order.sh mypi sd --reboot  # prefer the card, then reboot into it
+./boot-order.sh mypi usb --reboot # and back again
+```
+
+This is the lever for the case automatic fallback misses: a primary disk that
+boots far enough to be broken. It only reorders — both disks stay listed, so a
+wrong guess still lands somewhere you can ssh into and run it again, and both
+carry cloudflared so either one is reachable from anywhere.
+
+**It carries a risk nothing else here does.** The EEPROM write is staged and
+flashed during the next boot; losing power in that window can leave the
+bootloader unusable, which needs physical recovery with a dedicated SD image.
+Everything else in this repo is recoverable by unplugging something. This is
+not. Prefer the unplug route when you have the option.
 
 Rebuilding the card removes your fallback while it runs, so do it only when the
 primary is known good.

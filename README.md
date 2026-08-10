@@ -29,6 +29,9 @@ bootstrap.sh        base system, tunnel, every app, state, units, timers,
                     verification. Idempotent; will not restore over data
                     that is already there
 provision-rescue.sh the same imaging, plus cloudflared and rescue tooling
+boot-order.sh       choose which disk the Pi prefers at boot, remotely —
+                    for when the primary boots but is broken, so automatic
+                    fallback never fires
 remote/             the halves that execute on the Pi, piped over ssh
 deploy-app.sh       clone/build/start one app; re-run to update it
 auto-deploy.sh      redeploy only if the branch moved; driven by a timer
