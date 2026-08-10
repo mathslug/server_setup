@@ -50,8 +50,8 @@ appconf_load() {
   # One deploy key per app, not one shared key. This is forced rather than
   # chosen: GitHub refuses to register the same public key as a deploy key on a
   # second repository, so a single key stops working the moment there are two
-  # private repos. It is also the better arrangement — whorl's key cannot read
-  # karb's source.
+  # private repos. It is also the better arrangement: one app's key cannot read
+  # another's source.
   #
   # GIT_SSH_COMMAND rather than a Host alias in ~/.ssh/config, so REPO stays a
   # real, copy-pasteable GitHub URL and there is no second file to keep in sync.

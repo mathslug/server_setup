@@ -3,7 +3,7 @@
 # restore.sh — push backed-up state from this Mac back onto the Pi.
 #
 #     ./backup/restore.sh              # every app, and the tunnel
-#     ./backup/restore.sh karb         # one app
+#     ./backup/restore.sh <app>        # one app
 #     ./backup/restore.sh host         # just the tunnel
 #
 # The inverse of pull-backups.sh, reading the same apps/*.conf and the same

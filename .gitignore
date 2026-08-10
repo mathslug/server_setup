@@ -8,3 +8,5 @@ cloudflared/config.yml
 
 # Local working notes; not published with this repo.
 TODO.md
+__pycache__/
+*.pyc

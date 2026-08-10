@@ -3,7 +3,7 @@
 # deploy-app.sh — clone or update an app, build its image, and start it under
 # rootless podman + systemd.
 #
-#     /opt/rpi/deploy-app.sh whorl
+#     /opt/rpi/deploy-app.sh <app>
 #
 # Idempotent. First run clones and starts; later runs pull, rebuild, restart.
 # Application state under ~/data/<app> is never touched, so a redeploy cannot
@@ -14,9 +14,8 @@ set -euo pipefail
 APP="${1:-}"
 [ -n "$APP" ] || { echo "usage: $0 <app>"; exit 2; }
 
-# Run from somewhere every account can read. `sudo -u podsvc` inherits the
-# caller's working directory, and podman refuses to start if it cannot chdir
-# into it — which it can't, if you invoked this from the admin user's home.
+# `sudo -u podsvc` inherits the caller's cwd and podman refuses to start if it
+# cannot chdir there — which it cannot, from the admin user's home.
 cd /tmp
 
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
@@ -29,8 +28,7 @@ SVC_UID=$(id -u "$SERVICE_USER")
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 ok()  { printf '   %s\n' "$*"; }
 
-# XDG_RUNTIME_DIR is what makes `systemctl --user` and podman find the right
-# socket; without it both fail in confusing ways.
+# XDG_RUNTIME_DIR is what makes `systemctl --user` and podman find the socket.
 asuser() {
   sudo -u "$SERVICE_USER" env \
     HOME="$SVC_HOME" \
@@ -62,8 +60,8 @@ case "$REPO" in
     ;;
 esac
 
-# Check access before doing anything expensive, so a missing deploy key fails
-# in two seconds with the fix printed, rather than part-way through a build.
+# Before anything expensive, so a missing key fails in two seconds with the fix
+# printed rather than part-way through a build.
 if ! asuser git ls-remote --exit-code "$REPO" HEAD >/dev/null 2>&1; then
   OWNER_REPO=$(printf '%s' "$REPO" | sed 's#.*[:/]\([^/]*/[^/]*\)\.git#\1#')
   echo
@@ -117,15 +115,14 @@ fi
 # ---------------------------------------------------------------------------
 say "Build ${IMAGE}:latest"
 # ---------------------------------------------------------------------------
-# Built natively on the target, so architecture-specific dependencies (sharp,
-# better-sqlite3, esbuild) resolve for the host it will actually run on.
+# Built natively: per-architecture dependencies resolve for the host that runs
+# them.
 asuser podman build --quiet -t "${IMAGE}:latest" "$CHECKOUT" >/dev/null
 ok "built $(asuser podman image inspect "${IMAGE}:latest" --format '{{.Id}}' | cut -c1-12)"
 
-# The conf names a snapshot script; the image has to contain it. Nothing else
+# The conf names a snapshot script and the image must contain it; nothing else
 # connects the two, and .containerignore can silently exclude it. Checking here
-# costs one container start and moves the failure to the deploy that caused it,
-# rather than to that night's backup.
+# moves the failure to the deploy that caused it, not that night's backup.
 if [ -n "${BACKUP_SNAPSHOT_CMD:-}" ]; then
   SNAP_SCRIPT=$(printf '%s' "$BACKUP_SNAPSHOT_CMD" | awk '{print $NF}')
   asuser podman run --rm --entrypoint "" "${IMAGE}:latest" \
@@ -143,9 +140,8 @@ say "Install unit and start"
 asuser install -m 0644 "${CHECKOUT}/${QUADLET}" \
   "${SVC_HOME}/.config/containers/systemd/$(basename "$QUADLET")"
 
-# Optional systemd user units shipped by the app — timers and the services they
-# drive. They live in the app's repo so a schedule change ships with the code
-# change that motivated it.
+# Optional user units shipped by the app, so a schedule change ships with the
+# code change that motivated it.
 if [ -n "${UNITS_DIR:-}" ] && sudo test -d "${CHECKOUT}/${UNITS_DIR}"; then
   asuser mkdir -p "${SVC_HOME}/.config/systemd/user"
   for unit in $(sudo sh -c "ls -1 ${CHECKOUT}/${UNITS_DIR}"); do
@@ -169,9 +165,8 @@ fi
 asuser systemctl --user restart "${SERVICE}.service"
 ok "$(asuser systemctl --user is-active "${SERVICE}.service") — ${SERVICE}.service"
 
-# Auto-deploy. A SYSTEM timer, unlike the app's own units, because it runs this
-# script as root. Enabled here so an app cannot deploy cleanly and then silently
-# never pick up another commit.
+# A SYSTEM timer, unlike the app's own units, because it runs this as root.
+# Enabled here so an app cannot deploy and then silently never update.
 if [ -f /etc/systemd/system/autodeploy@.timer ]; then
   sudo systemctl enable --now "autodeploy@${APP}.timer" >/dev/null 2>&1
   ok "autodeploy@${APP}.timer — $(systemctl is-active "autodeploy@${APP}.timer")"

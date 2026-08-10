@@ -1,20 +1,12 @@
 #!/usr/bin/env bash
 #
-# bootstrap.sh — bring a fresh Raspberry Pi OS install to the state this
-# project expects. Idempotent: safe to run repeatedly, and safe to run on a
-# machine that is already half-configured.
+# setup.sh — fresh Raspberry Pi OS install to a container host. Idempotent.
+# Piped over ssh by bootstrap.sh; runs as a user with passwordless sudo.
 #
-# Run as a user with sudo (e.g. mathslug), ON the Pi or over ssh:
-#     ssh mypi 'bash -s' < bootstrap.sh
-#     ssh mypi 'bash -s -- --swap-mb 8192' < bootstrap.sh
+# Swap and persistent logs are skipped on an SD card: both trade card life for
+# something this machine does not need.
 #
-# Swap and log persistence depend on what root is on: an SD card gets neither,
-# because both trade card life for something this machine does not need. Pass
-# --swap-mb to size the swapfile; the default leaves it alone.
-#
-# Assumes: Raspberry Pi OS / Debian 13 (trixie) or newer, arm64.
-# On Debian 12 (bookworm) podman is 4.3, which has no Quadlet support — the
-# script warns but continues, since everything else still applies.
+# Needs Debian 13 (trixie) or newer for Quadlet; warns and continues below.
 
 set -euo pipefail
 
@@ -24,8 +16,8 @@ SERVICE_UID_RANGE_SIZE=65536
 REBOOT_NEEDED=0
 SWAP_MB=""
 REPO_URL="https://github.com/mathslug/server_setup.git"
-# Set rather than copied from the provisioning host: the images ship en_GB, so
-# copying would propagate whatever the last rebuild happened to inherit.
+# Set, not copied: images ship en_GB, and copying propagates whatever the last
+# rebuild inherited.
 LOCALE="en_US.UTF-8"
 
 while [ $# -gt 0 ]; do
@@ -58,11 +50,9 @@ if [ "${VERSION_ID:-0}" -lt 13 ] 2>/dev/null; then
   ok "         Quadlet units in this repo will not work until you reach trixie."
 fi
 
-# Before apt, and not optional. A Pi has no RTC, so a fresh image boots with
-# the clock at its build date; apt then rejects the archive signature as "not
-# live until" a date it believes is in the future, skips that repository, falls
-# back to the stale index the image shipped with, and the install 404s on
-# versions that have since moved. The symptom names packages, not time.
+# Before apt, not optional. No RTC, so a fresh image boots at its build date;
+# apt then rejects signatures as future-dated, falls back to the stale index,
+# and installs 404. The symptom names packages, not time.
 if [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" != "yes" ]; then
   sudo systemctl start systemd-timesyncd 2>/dev/null || true
   for _ in $(seq 1 40); do
@@ -72,8 +62,7 @@ if [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" != "yes" ]; th
 fi
 ok "clock: $(date -u +%Y-%m-%dT%H:%M:%SZ) (synchronized: $(timedatectl show -p NTPSynchronized --value 2>/dev/null))"
 
-# A fresh image carries package lists from the day it was built, and the
-# versions they name are gone from the mirrors, so the first install 404s.
+# The image's package lists name versions the mirrors have dropped.
 sudo DEBIAN_FRONTEND=noninteractive apt-get -qq update
 ok "package lists updated"
 
@@ -104,9 +93,9 @@ done
 # ---------------------------------------------------------------------------
 say "Journald"
 # ---------------------------------------------------------------------------
-# On an SD card journald is the dominant source of writes (~1GB/day) and the
-# journal lives in tmpfs, so logs do not survive a reboot. Anywhere else, keep
-# them: a post-mortem needs the logs from before the reboot that lost them.
+# journald is the dominant source of SD card writes (~1GB/day), so on a card it
+# goes to tmpfs. Anywhere else keep it: a post-mortem needs the logs from before
+# the reboot that lost them.
 sudo mkdir -p /etc/systemd/journald.conf.d
 if [ "$ON_SD" = "1" ]; then
   sudo tee /etc/systemd/journald.conf.d/00-storage.conf >/dev/null <<'EOF'
@@ -133,16 +122,14 @@ sudo systemctl restart systemd-journald
 # ---------------------------------------------------------------------------
 say "Swap"
 # ---------------------------------------------------------------------------
-# A safety valve, not a fix: this machine has never swapped a page. Sized past
-# about one times RAM the return is not diminishing but zero — it would thrash
-# into uselessness long before filling it. Never on an SD card.
+# A safety valve, not a fix. Past about 1x RAM the return is zero — it would
+# thrash long before filling it.
 if [ -z "$SWAP_MB" ]; then
   ok "unchanged (pass --swap-mb to set it)"
 elif [ "$ON_SD" = "1" ]; then
   ok "SKIPPED: root is on an SD card"
 else
-  # Not on a Lite image, and it owns both the file and its regeneration, so it
-  # is worth having rather than hand-rolling fallocate/mkswap/fstab.
+  # Owns the file and its regeneration; better than hand-rolled mkswap/fstab.
   command -v dphys-swapfile >/dev/null 2>&1 \
     || sudo DEBIAN_FRONTEND=noninteractive apt-get -y install dphys-swapfile >/dev/null
   sudo sed -i "s/^#\?CONF_SWAPSIZE=.*/CONF_SWAPSIZE=${SWAP_MB}/" /etc/dphys-swapfile
@@ -181,9 +168,8 @@ ok "enabled"
 # ---------------------------------------------------------------------------
 say "Memory cgroup controller"
 # ---------------------------------------------------------------------------
-# The Pi firmware prepends cgroup_disable=memory to the kernel command line — it
-# is not in cmdline.txt. Without overriding it, container memory limits are
-# silently ignored. A later parameter wins, so appending is sufficient.
+# The firmware prepends cgroup_disable=memory; without the override, memory
+# limits are silently ignored. A later parameter wins, so appending suffices.
 CMDLINE=/boot/firmware/cmdline.txt
 [ -f "$CMDLINE" ] || CMDLINE=/boot/cmdline.txt
 if grep -q "cgroup_enable=memory" "$CMDLINE" 2>/dev/null; then
@@ -212,8 +198,8 @@ ok "podman $(podman --version | awk '{print $3}')"
 # ---------------------------------------------------------------------------
 say "Service account: ${SERVICE_USER}"
 # ---------------------------------------------------------------------------
-# No sudo, no password. Under rootless podman a container's uid 0 maps to this
-# account, so a container escape lands on a user that cannot escalate.
+# No sudo, no password: rootless podman maps container uid 0 here, so an escape
+# lands on a user that cannot escalate.
 if id "$SERVICE_USER" >/dev/null 2>&1; then
   ok "exists"
 else
@@ -230,8 +216,8 @@ if ! grep -q "^${SERVICE_USER}:" /etc/subuid 2>/dev/null; then
 fi
 ok "subuid: $(grep "^${SERVICE_USER}:" /etc/subuid)"
 
-# Without lingering, the user manager stops at logout and takes the containers
-# with it — so nothing would come back after a power cut.
+# Without this the user manager exits at logout and takes the containers with
+# it, so nothing returns after a power cut.
 sudo loginctl enable-linger "$SERVICE_USER"
 ok "linger: $(loginctl show-user "$SERVICE_USER" --property=Linger)"
 
@@ -242,19 +228,17 @@ sudo -u "$SERVICE_USER" mkdir -p \
   "${SVC_HOME}/data"
 ok "layout: ${SVC_HOME}/{apps,data,.config/containers/systemd}"
 
-# Health-collector state: the backup receipt the Mac writes, and the job
-# receipts the apps write. Must be under /var/lib rather than /run, which is
-# tmpfs — a receipt there would vanish on reboot and read as "never backed up".
+# Under /var/lib, not /run: a receipt on tmpfs vanishes on reboot and reads as
+# "never backed up".
 sudo install -d -m 0755 /var/lib/rpi-health
 # Job receipts come from the apps' scheduled jobs, which run as the service
 # account, so it must own this one.
 sudo install -d -m 0755 -o "$SERVICE_USER" -g "$SERVICE_USER" /var/lib/rpi-health/jobs
 ok "state: /var/lib/rpi-health (backup receipt, job receipts)"
 
-# The dashboard container bind-mounts /run/rpi-health/www, and /run is tmpfs.
-# The collector creates it, but the dashboard may well start first — on a fresh
-# disk the collector is not even installed yet — and a bind mount whose source
-# is missing fails the unit. tmpfiles.d settles it on every boot, whoever wins.
+# The dashboard bind-mounts /run/rpi-health/www and /run is tmpfs. The collector
+# creates it but may not have run — or be installed — yet, and a bind mount with
+# a missing source fails the unit. tmpfiles.d settles it whoever wins.
 sudo tee /etc/tmpfiles.d/rpi-health.conf >/dev/null <<'EOF'
 d /run/rpi-health     0755 root root -
 d /run/rpi-health/www 0755 root root -
@@ -265,10 +249,8 @@ ok "runtime: /run/rpi-health/www (recreated each boot)"
 # ---------------------------------------------------------------------------
 say "This repo, at /opt/rpi"
 # ---------------------------------------------------------------------------
-# Everything after this point runs from /opt/rpi — deploys, the tunnel config,
-# the units. Cloning it here rather than by hand is what keeps a rebuild
-# reproducible: a step performed once over ssh is a step that does not survive
-# the next disk. Public, so no credential.
+# Everything after this runs from /opt/rpi. Cloned here, not by hand: a step
+# performed once over ssh does not survive the next disk.
 if [ -d /opt/rpi/.git ]; then
   ok "already present at $(sudo git -C /opt/rpi rev-parse --short HEAD)"
 else
@@ -279,9 +261,7 @@ fi
 # ---------------------------------------------------------------------------
 say "Health dashboard"
 # ---------------------------------------------------------------------------
-# Platform furniture rather than an app, so deploy-app.sh does not install it.
-# Until this existed it was placed by hand, which meant the collector kept
-# writing pages after a rebuild and nothing served them.
+# Platform furniture, not an app, so deploy-app.sh does not install it.
 SVC_UID=$(id -u "$SERVICE_USER")
 sudo install -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0644 \
   /opt/rpi/monitor/dashboard.container \
@@ -291,10 +271,8 @@ sudo -u "$SERVICE_USER" env HOME="$SVC_HOME" \
   DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${SVC_UID}/bus" \
   systemctl --user daemon-reload
 
-# Only start it once the memory cgroup is live. The unit sets --memory, and
-# crun fails with "opening file memory.max: No such file or directory" when the
-# controller is absent — which it is until the reboot enabled above. Lingering
-# plus WantedBy=default.target brings it up on that reboot regardless.
+# Only once the memory cgroup is live: the unit sets --memory, and crun fails
+# without the controller. Lingering brings it up on that reboot anyway.
 if grep -q memory /sys/fs/cgroup/cgroup.controllers; then
   sudo -u "$SERVICE_USER" env HOME="$SVC_HOME" \
     XDG_RUNTIME_DIR="/run/user/${SVC_UID}" \
@@ -308,9 +286,8 @@ fi
 # ---------------------------------------------------------------------------
 say "SSH known_hosts for github.com"
 # ---------------------------------------------------------------------------
-# Deploy keys are NOT generated here — GitHub refuses the same public key on a
-# second repository, so deploy-app.sh generates one per app. All this does is
-# pin github.com, so the first clone does not block on a prompt nobody answers.
+# Deploy keys are per-app and generated by deploy-app.sh. This just pins
+# github.com so the first clone does not block on a prompt nobody answers.
 sudo -u "$SERVICE_USER" mkdir -p "${SVC_HOME}/.ssh"
 sudo -u "$SERVICE_USER" chmod 700 "${SVC_HOME}/.ssh"
 sudo -u "$SERVICE_USER" ssh-keyscan -H github.com 2>/dev/null \

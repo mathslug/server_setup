@@ -10,15 +10,12 @@
 #
 # Constraints to preserve:
 #
-#   * A unique disk ID. Choosing which disk to boot only settles where the
-#     kernel comes from — the kernel then mounts root by root=PARTUUID= from
-#     cmdline.txt, and every Raspberry Pi OS image ships the same one. With two
-#     disks attached that is ambiguous, and booting one disk's kernel onto the
-#     other's root looks like success while every write lands on the wrong disk.
-#   * The ssh host keys are copied, so the machine keeps its ssh identity and
-#     known_hosts on the Mac still matches after the swap.
-#   * The user is created by chroot rather than by userconf.txt, so it gets the
-#     same uid and password hash instead of whatever first boot decides.
+#   * A unique disk ID. Every image ships the same PARTUUID, and the kernel
+#     mounts root by it — with two disks attached that is ambiguous, and booting
+#     one disk's kernel onto the other's root looks like success.
+#   * ssh host keys are copied, so known_hosts still matches after the swap.
+#   * The user is created by chroot, not userconf.txt, so it keeps its uid and
+#     password hash.
 
 set -euo pipefail
 
@@ -96,9 +93,8 @@ say "Identity"
 UID_N=$(id -u "$WHO"); GID_N=$(id -g "$WHO")
 HASH=$(getent shadow "$WHO" | cut -d: -f2)
 
-# The image ships a placeholder account at uid 1000 (`pi`, nologin) that first
-# boot would rename from userconf.txt. Rename it here instead — the uid, home
-# and group already exist, so this is one step rather than delete-and-recreate.
+# The image ships a placeholder at uid 1000 (`pi`, nologin). Rename it: the uid,
+# home and group already exist.
 PLACEHOLDER=$(chroot "$MNT" getent passwd "$UID_N" | cut -d: -f1 || true)
 if [ -n "$PLACEHOLDER" ] && [ "$PLACEHOLDER" != "$WHO" ]; then
   chroot "$MNT" usermod -l "$WHO" -d "/home/${WHO}" -m "$PLACEHOLDER"
@@ -109,9 +105,8 @@ elif [ -z "$PLACEHOLDER" ]; then
 fi
 chroot "$MNT" usermod -p "$HASH" -s /bin/bash "$WHO"
 
-# Added one at a time: the running system carries groups a Lite image may not
-# define (spi, gpio, lpadmin), and usermod -G rejects the whole list if one is
-# missing.
+# One at a time: usermod -G rejects the whole list if a group is missing, and a
+# Lite image lacks some the running system has.
 GRP=""
 for g in sudo adm dialout cdrom audio video plugdev games users input netdev; do
   chroot "$MNT" getent group "$g" >/dev/null 2>&1 || continue
@@ -127,9 +122,8 @@ install -m 600 -o "$UID_N" -g "$GID_N" \
   "/home/${WHO}/.ssh/authorized_keys" "${MNT}/home/${WHO}/.ssh/authorized_keys"
 cp -a /etc/ssh/ssh_host_* "$MNT/etc/ssh/"
 touch "$MNT/boot/firmware/ssh"
-# ssh.service ships disabled; sshswitch.service enables it when that flag file
-# exists. Enable it here as well rather than trusting one mechanism, because
-# the cost of it not starting is a disk that has to be physically pulled.
+# ssh.service ships disabled and sshswitch enables it from that flag file.
+# Enable it directly too: if it does not start, the disk has to be pulled.
 install -d "$MNT/etc/systemd/system/multi-user.target.wants"
 ln -sf /lib/systemd/system/ssh.service \
        "$MNT/etc/systemd/system/multi-user.target.wants/ssh.service"
@@ -147,20 +141,18 @@ cp -a /etc/NetworkManager/system-connections/. \
 chmod 600 "$MNT"/etc/NetworkManager/system-connections/* 2>/dev/null || true
 ok "hostname $(cat /etc/hostname), $(ls -1 /etc/NetworkManager/system-connections | tr '\n' ' ')"
 
-# A correct wifi profile is not enough. Raspberry Pi OS persists the radio as
-# rfkill-soft-blocked, and NetworkManager keeps its own WirelessEnabled flag;
-# a fresh image restores both as disabled and comes up with no network and no
-# way in. Carry the state from this machine, which is demonstrably connected.
+# A correct profile is not enough: the radio is persisted rfkill-blocked and
+# NetworkManager keeps its own WirelessEnabled flag. A fresh image restores both
+# disabled and comes up with no network and no way in.
 mkdir -p "$MNT/var/lib/systemd/rfkill" "$MNT/var/lib/NetworkManager"
 cp -a /var/lib/systemd/rfkill/. "$MNT/var/lib/systemd/rfkill/" 2>/dev/null || true
 [ -f /var/lib/NetworkManager/NetworkManager.state ] \
   && cp -a /var/lib/NetworkManager/NetworkManager.state "$MNT/var/lib/NetworkManager/"
 ok "radio state: $(grep -h . "$MNT"/var/lib/systemd/rfkill/*wlan* 2>/dev/null | tr '\n' ' ')$(grep -h WirelessEnabled "$MNT/var/lib/NetworkManager/NetworkManager.state" 2>/dev/null)"
 
-# The first-boot wizard blocks tty1 asking for a keyboard layout and a
-# username, so the machine never finishes booting. The user already exists, so
-# there is nothing for it to ask — and left to run it renames that user and
-# replaces its home directory, taking authorized_keys with it.
+# The wizard blocks tty1 asking for a keyboard layout and username, so the
+# machine never finishes booting — and it renames the user we just made,
+# replacing its home directory and taking authorized_keys with it.
 for u in userconfig.service userconf.service; do
   [ -e "$MNT/lib/systemd/system/$u" ] || continue
   ln -sf /dev/null "$MNT/etc/systemd/system/$u"
@@ -188,10 +180,9 @@ fi
 sed -i 's#init=/usr/lib/raspberrypi-sys-mods/firstboot ##' "$MNT/boot/firmware/cmdline.txt"
 ok "$(tr ' ' '\n' < "$MNT/boot/firmware/cmdline.txt" | grep PARTUUID)"
 
-# The disk has to come up reachable from OFF the LAN, not just on it. Without
-# this the tunnel is installed later by bootstrap.sh — which is too late, since
-# reaching the machine to run bootstrap is the thing the tunnel provides. A
-# rebuild driven from anywhere but the same network would strand it.
+# The disk must come up reachable from off the LAN. Installing the tunnel later
+# in bootstrap.sh is too late: reaching the machine to run bootstrap is what the
+# tunnel provides.
 if [ -n "$BUNDLE" ]; then
   say "Tunnel"
   [ -f "${BUNDLE}/cert.pem" ] || die "no cert.pem in ${BUNDLE}"
@@ -205,9 +196,8 @@ if [ -n "$BUNDLE" ]; then
   rm -rf "$MNT/tmp/cf"
 fi
 
-# Read by monitor/check-rescue.sh to age the disk. An image that never boots
-# never takes a security update, so how old it is matters as much as whether
-# its contents still match.
+# Read by check-rescue.sh. A disk that never boots never takes a security
+# update, so age matters as much as drift.
 printf '%s %s\n' "$(date +%s)" "$IMG_URL" > "$MNT/etc/rpi-provisioned"
 
 say "Verifying"
@@ -215,9 +205,8 @@ say "Verifying"
 chroot "$MNT" id "$WHO" >/dev/null            || die "user was not created"
 ls "$MNT"/etc/ssh/ssh_host_*_key >/dev/null   || die "host keys did not land"
 grep -q "PARTUUID=${PARTUUID}" "$MNT/etc/fstab" || die "fstab was not rewritten"
-# Everything above is recoverable by re-running. These two are not: without
-# them the machine boots with no network and no way in, and the only fix is
-# physically pulling the disk.
+# Everything above is fixed by re-running. These are not: without them the disk
+# boots with no network and the only fix is pulling it.
 ls "$MNT"/etc/NetworkManager/system-connections/*.nmconnection >/dev/null 2>&1 \
   || die "no wifi profile — the machine would boot unreachable"
 grep -q '^0$' "$MNT"/var/lib/systemd/rfkill/*wlan 2>/dev/null \

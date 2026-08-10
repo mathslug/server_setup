@@ -1,4 +1,4 @@
-# Templated: autodeploy@whorl.service, autodeploy@karb.service, ...
+# Templated: one instance per app, autodeploy@<app>.service.
 # Installed to /etc/systemd/system/. Started by autodeploy@.timer.
 
 [Unit]

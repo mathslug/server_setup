@@ -5,20 +5,15 @@
 #     ./bootstrap.sh mypi
 #     ./bootstrap.sh mypi --swap-mb 8192
 #
-# Run on the Mac, after provision-disk.sh. Idempotent: re-running against a
-# working system changes nothing and still reports green, which is what makes
-# it safe to re-run after a failure part-way through.
+# Run on the workstation, after provision-disk.sh and boot-order.sh. Idempotent:
+# re-running against a working system changes nothing and still reports green.
 #
-# It wraps the tools rather than reimplementing them — remote/setup.sh,
-# deploy-app.sh, backup/restore.sh, systemd/install-units.sh — and owns the
-# ordering between them, which is the part that used to live in someone's head:
+# It wraps the other tools and owns the ordering between them:
 #
 #   * the memory cgroup needs a reboot before podman limits mean anything
-#   * the tunnel comes back before the apps, so their health checks are
-#     answerable from outside
-#   * an app is deployed and THEN restored. deploy-app.sh health-checks against
-#     a database that does not exist yet, so its check is advisory until the
-#     restore has run; the check that counts is at the end of this script.
+#   * the tunnel comes back before the apps, so health checks answer from outside
+#   * an app is deployed and THEN restored — deploy-app.sh health-checks against
+#     a database that does not exist yet, so its check is advisory
 
 set -euo pipefail
 
@@ -60,13 +55,9 @@ ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST" true 2>/dev/null \
 say "Base system"
 ssh "$HOST" "bash -s -- ${SWAP_ARGS[*]}" < "${HERE}/remote/setup.sh"
 
-# Asked of the kernel rather than parsed out of the log above: the controller
-# either shows up in the running kernel or it does not.
-#
-# "yes", "no" and "could not ask" are three different answers. Over the tunnel
-# the third is common for a minute after a reboot, while cloudflared
-# reconnects, and reporting it as "no" turns a wait into a false alarm about
-# memory limits being ignored.
+# Asked of the kernel, not parsed from the log. "yes", "no" and "could not ask"
+# are three answers: over the tunnel the third is normal for a minute after a
+# reboot, and calling it "no" turns a wait into a false alarm.
 cgroup_state() {
   ssh -o BatchMode=yes -o ConnectTimeout=15 "$HOST" \
     'grep -q memory /sys/fs/cgroup/cgroup.controllers && echo yes || echo no' 2>/dev/null \
@@ -89,8 +80,7 @@ if [ "$(cgroup_state)" != "yes" ]; then
 fi
 
 # --- Tunnel -----------------------------------------------------------------
-# Before the apps: their health checks are reachable from outside only once
-# this is up, and a broken tunnel is much easier to see now than later.
+# Before the apps: a broken tunnel is easier to see now than later.
 say "Tunnel"
 "${HERE}/backup/restore.sh" host
 ssh "$HOST" 'systemctl is-active --quiet cloudflared' \
@@ -98,9 +88,9 @@ ssh "$HOST" 'systemctl is-active --quiet cloudflared' \
 ok "cloudflared active"
 
 # --- Apps -------------------------------------------------------------------
-# A private repo needs a deploy key, and podsvc's key is new on a rebuilt disk,
-# so the old one on GitHub is dead. deploy-app.sh generates the replacement and
-# exits; rotate it here and retry once. Public repos never take this path.
+# A rebuilt disk has a new podsvc key, so a private repo's old one is dead.
+# deploy-app.sh generates the replacement; rotate it and retry. Public repos
+# never take this path.
 rotate_deploy_key() {
   local app="$1" owner_repo pub
   command -v gh >/dev/null 2>&1 || { warn "gh not installed; add ${DEPLOY_KEY}.pub by hand"; return 1; }
@@ -125,11 +115,9 @@ for APP in "${APPS[@]}"; do
   say "App: ${APP}"
   appconf_load "$APP"
 
-  # Asked BEFORE deploying, and this ordering is the whole point: deploying
-  # starts the app, which creates an empty database, and a check afterwards
-  # sees a non-empty file and concludes there is data worth protecting. That
-  # skipped the restore on a genuine rebuild and left the app empty while
-  # bootstrap reported success.
+  # Asked BEFORE deploying: deploying starts the app, which creates an empty
+  # database, and a check afterwards would see a non-empty file and skip the
+  # restore — leaving the app empty while this reports success.
   HAD_DATA=no
   if [ -n "${BACKUP_DB:-}" ] \
     && ssh "$HOST" "sudo test -s ${DATA_DIR}/${BACKUP_DB}" 2>/dev/null; then
@@ -146,9 +134,8 @@ for APP in "${APPS[@]}"; do
       *) warn "${APP}: deploy reported a problem; continuing to the restore" ;;
     esac
   fi
-  # Restore only onto an app that had no data before this run. Re-running
-  # against a healthy machine must not roll the database back to the last
-  # backup; --force-restore is the deliberate way to overwrite live data.
+  # Only onto an app that had no data: re-running must not roll a live database
+  # back to the last backup.
   if [ "$FORCE_RESTORE" = "1" ] || [ "$HAD_DATA" = "no" ]; then
     "${HERE}/backup/restore.sh" "$APP"
   else
@@ -160,9 +147,7 @@ done
 say "Units and timers"
 ssh "$HOST" 'sudo /opt/rpi/systemd/install-units.sh' | sed 's/^/   /'
 ssh "$HOST" "sudo systemctl enable --now rpi-selfupdate.timer rpi-health.timer rpi-rescue-check.timer" >/dev/null 2>&1
-# Once, now: the health timer is every five minutes and the rescue check is
-# daily, so without this the dashboard serves an empty directory and then an
-# unchecked rescue row for most of a day.
+# Once now, or the dashboard serves an empty page and an unchecked rescue row.
 ssh "$HOST" 'sudo systemctl start rpi-health.service' >/dev/null 2>&1 || true
 ssh "$HOST" 'sudo systemctl start rpi-rescue-check.service' >/dev/null 2>&1 || true
 for APP in "${APPS[@]}"; do
@@ -183,9 +168,8 @@ for APP in "${APPS[@]}"; do
   esac
 done
 
-# Printing row counts is not checking them. The drill that found this printed
-# "posts=0" and reported success, because nothing compared the live database
-# against the backup it was supposed to have come from.
+# Printing row counts is not checking them: a rebuild once printed "posts=0"
+# and reported success.
 for APP in "${APPS[@]}"; do
   appconf_load "$APP"
   [ -n "${BACKUP_DB:-}" ] || continue
@@ -209,9 +193,8 @@ ssh "$HOST" 'echo "   root: $(findmnt -no SOURCE /) $(df -h / | awk "NR==2{print
 
 if [ "$VERIFY" = "1" ]; then
   say "Row counts"
-  # The proof that the data came back, using the tool that already knows how to
-  # check it. Advisory: a rebuild that serves correctly should not be reported
-  # as failed because the Mac could not reach the Pi for a backup.
+  # Advisory: a rebuild that serves correctly should not fail because the
+  # workstation could not reach the Pi for a backup.
   "${HERE}/backup/pull-backups.sh" 2>&1 | grep -E ': ok —|INCOMPLETE|FAILED' | sed 's/^/   /' \
     || warn "the verification backup did not complete; run ./backup/pull-backups.sh by hand"
 fi

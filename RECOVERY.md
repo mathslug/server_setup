@@ -1,148 +1,116 @@
-# Recovery: the boot disk died
+# Recovery
 
-Assumes the disk is gone and the Pi holds nothing. Everything below comes from
-this repo plus `backups/latest` on the Mac.
+Rebuilding from a wiped disk, using this repo plus `backups/latest` on the
+workstation. About 45 minutes, mostly waiting on an image write and a build.
 
-Rough time: 45 minutes, most of it waiting on an image write and a container
-build.
+Needs `gh` logged in if any app repo is private.
 
-## What you need
+## Break glass
 
-- The Mac, with this repo and its `backups/` directory
-- A disk to boot from — a USB SSD, or the SD card
-- `gh` logged in, if any app repo is private
+### 1. Get onto the rescue disk
 
-## The whole thing
+Build one if it does not exist — this works from the running system as long as
+it still boots enough to ssh:
 
 ```
-ssh mypi lsblk                              # find the disk; do not guess
-
-./provision-disk.sh mypi /dev/sda           # erases and images it
-./boot-order.sh     mypi usb --reboot       # boot it
-./bootstrap.sh      mypi --swap-mb 8192     # everything else
+ssh <host> lsblk                       # find the disk; do not guess
+./provision-rescue.sh <host> /dev/mmcblk0
 ```
 
-`provision-disk.sh` makes a disk bootable and stops. It never reboots, because
-which disk boots is a separate decision — that is what lets you build a rescue
-card without booting it. `boot-order.sh` makes the choice, reboots, waits, and
-reports which disk actually came up.
-
-The image defaults to Raspberry Pi OS Lite; pass a URL as a third argument to
-override. `provision-disk.sh` also puts cloudflared on the disk, so it comes
-back reachable from anywhere rather than only from its own LAN — which matters,
-because reaching it is what `bootstrap.sh` needs.
-
-It also gives the disk this machine's identity — user, ssh host keys, wifi,
-hostname, timezone — which is what lets it come back without a prompt.
-
-`bootstrap.sh` does the rest: packages, `podsvc`, the memory cgroup and the
-reboot it needs, swap, `/opt/rpi`, the tunnel, every app in `apps/*.conf`
-(deploy, deploy-key rotation, state restore), units, timers, and a verification
-pass. It is safe to re-run — it will not restore over data that is already
-there unless you pass `--force-restore`.
-
-If the Pi never comes back from the `boot-order.sh` step, the new disk is
-booting badly rather than not at all, so the firmware sticks with it instead of
-falling through. Unplug it, power-cycle onto the other disk, and re-run.
-
-## The rescue card
-
-The SD card is a fallback, not a replica: full desktop image, ssh, and
-cloudflared on the same tunnel. No podman and no apps.
+Then boot it, remotely or physically:
 
 ```
-./provision-rescue.sh mypi /dev/mmcblk0
+./boot-order.sh <host> sd --reboot
 ```
 
-Defaults to the Full desktop image — this is the disk you boot when a browser
-and a graphical wifi picker are worth having.
+or **unplug the primary and power-cycle** — the firmware falls through on its
+own. Prefer this when you can reach the machine; see the warning below.
 
-`BOOT_ORDER=0xf14` prefers USB and falls back to the card **only when the
-primary disk is absent or unbootable**. A disk that is corrupt but still
-presents a boot partition gets chosen forever. Treat this as a way back in, not
-as automatic failover.
-
-### Getting onto the rescue card deliberately
-
-Two routes, and which one you can use depends on where you are.
-
-**Unplug the SSD and power-cycle.** Nothing to configure, nothing to undo, and
-it cannot fail in a way that leaves you worse off. Use this whenever you can
-reach the machine.
-
-**Or change the boot order over ssh**, for when you cannot:
+### 2. Rebuild the primary
 
 ```
-./boot-order.sh mypi              # what is it set to now?
-./boot-order.sh mypi sd --reboot  # prefer the card, then reboot into it
-./boot-order.sh mypi usb --reboot # and back again
+ssh <host> lsblk                       # confirm which disk is the primary
+./provision-disk.sh <host> /dev/sda    # erases and images it
 ```
 
-This is the lever for the case automatic fallback misses: a primary disk that
-boots far enough to be broken. It only reorders — both disks stay listed, so a
-wrong guess still lands somewhere you can ssh into and run it again, and both
-carry cloudflared so either one is reachable from anywhere.
+Writes the image, gives the disk this machine's identity — user, ssh host keys,
+wifi, hostname, timezone — and installs cloudflared, so it comes back reachable
+from anywhere. Does **not** reboot.
+
+### 3. Boot it
+
+```
+./boot-order.sh <host> usb --reboot
+```
+
+Flips the preference, reboots, waits, reports which disk came up. If it reports
+the wrong one, the new disk boots badly rather than not at all, so the firmware
+sticks with it. Unplug it, power-cycle onto the rescue disk, retry step 2.
+
+### 4. Bring the services back
+
+```
+./bootstrap.sh <host> --swap-mb 8192
+```
+
+Packages, service account, memory cgroup and the reboot it needs, swap,
+`/opt/rpi`, tunnel, every app in `apps/*.conf`, units, timers, verification.
+
+Safe to re-run — it will not restore over existing data without
+`--force-restore`. Passes when every app answers 200 and each database matches
+its backup's size.
+
+## The rescue disk
+
+A fallback, not a replica: full desktop image, ssh, cloudflared on the same
+tunnel, plus `parted`, `smartctl`, `git`, `rsync`, `tmux`. No containers, no
+apps. It exists to get you a shell, and a browser if a monitor is attached.
+
+`BOOT_ORDER` falls through **only when the primary is absent or unbootable**. A
+disk that is corrupt but still presents a boot partition gets chosen forever —
+that is what `boot-order.sh` is for.
+
+```
+./boot-order.sh <host>                 # what is it now?
+./boot-order.sh <host> sd --reboot     # prefer the other disk, and boot it
+```
+
+It only reorders; both disks stay listed and both carry cloudflared, so a wrong
+guess still lands somewhere reachable.
 
 **It carries a risk nothing else here does.** The EEPROM write is staged and
-flashed during the next boot; losing power in that window can leave the
-bootloader unusable, which needs physical recovery with a dedicated SD image.
-Everything else in this repo is recoverable by unplugging something. This is
-not. Prefer the unplug route when you have the option.
+flashed during the *next* boot — so an unplanned reboot applies a change you
+left armed, and losing power during the flash needs physical recovery with a
+dedicated SD image. Everything else here is undone by unplugging something.
 
-Rebuilding the card removes your fallback while it runs, so do it only when the
-primary is known good.
+Rebuild the rescue disk when your ssh key changes, host keys are regenerated,
+the tunnel is recreated, or you join a new network — and periodically anyway,
+since a disk that never boots never takes a security update. The dashboard
+reports drift and age; only booting it proves it works.
 
----
+## What the scripts do not decide
 
-## What the scripts do not decide for you
+**Lost tunnel credentials.** Issued once, never reissued, but present in every
+backup under `host/cloudflared/`. If those are gone too:
+`cloudflared tunnel login`, `tunnel create`, `tunnel route dns --overwrite-dns`
+per hostname, new UUID into `config.yml`, delete the orphan.
 
-### If the tunnel credentials are lost
+**No working disk at all.** Everything above needs a running system to
+provision *from*. Write a card with Raspberry Pi Imager — hostname, ssh key and
+wifi in its settings — boot that, then join at step 2.
 
-Cloudflare issues a tunnel's credentials once and will not reissue them. They
-are in every backup under `host/cloudflared/`, so this only arises if the
-backups are gone too.
+**Restoring a database by hand.** Delete the `-wal` and `-shm` alongside it
+first, or SQLite replays the empty log over what you restored. Check row counts;
+an empty table means you hit exactly that.
 
-```
-ssh mypi 'sudo cloudflared tunnel login'      # prints a URL; authorize mathslug.com
-ssh mypi 'sudo cloudflared tunnel create mypi2'
-ssh mypi 'sudo cloudflared tunnel route dns --overwrite-dns mypi2 whorl.mathslug.com'
-```
+**What is not recoverable.** Anything since the last backup.
 
-Put the new UUID in `/etc/cloudflared/config.yml`, repeat the DNS route per
-hostname, then delete the orphan: `cloudflared tunnel delete mypi`. The browser
-may hand you `cert.pem` as a download rather than delivering it to the Pi.
+## Proving it works
 
-### Restoring a database by hand
+A recovery path nobody has run is a rumour. Take a backup, then run the
+break-glass sequence deliberately. It passes when row counts match
+`backups/latest` and every app answers 200.
 
-`backup/restore.sh` handles this, but if you are doing it manually: **delete the
-`-wal` and `-shm` alongside the database first.** A freshly deployed app has
-created an empty database and a write-ahead log, and SQLite will replay that log
-over the file you just restored. Snapshots are taken with `VACUUM INTO`, so they
-are already consistent — there is nothing to replay and no repair step.
-
-Check row counts afterwards. If posts came back as 0, that is the WAL.
-
-### What is not recoverable
-
-Anything written since the last backup — up to 24 hours of posts, comments,
-images and scan results. The backup runs at 06:00 and needs the Mac awake and
-able to reach the Pi.
-
-For karb that is a day of prices and evaluations, which the next scan largely
-re-derives from Kalshi. The irreplaceable part is the **human review decisions**
-in `candidate_pairs`; those exist nowhere else.
-
-### Proving it works
-
-A recovery path nobody has run is a rumour. The real test is to rebuild *from*
-the rescue card with the primary disk wiped:
-
-```
-./backup/pull-backups.sh                     # immediately before — the next step erases
-# unplug the primary disk, power-cycle onto the card
-./provision-disk.sh mypi /dev/sda
-./boot-order.sh     mypi usb --reboot
-./bootstrap.sh      mypi --swap-mb 8192
-```
-
-It passes when the row counts match `backups/latest` and both apps answer 200.
+Worth doing after any change to provisioning. Four rehearsals turned up eight
+defects that reading the scripts had not, two of which only appear on a cold
+disk.

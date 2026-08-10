@@ -6,9 +6,9 @@
 # Unlike the apps, this binds 0.0.0.0 rather than loopback — the whole point is
 # reaching it from a phone on the same network.
 #
-# It is ALSO reachable at mypi.mathslug.com through the tunnel (see
-# cloudflared/host-ingress.conf). It has no login of its own, so the Cloudflare
-# Access policy in front of that hostname is the only thing protecting it.
+# It is ALSO reachable through the tunnel if cloudflared/host-ingress.conf
+# routes a hostname here. It has no login of its own, so the Cloudflare Access
+# policy in front of that hostname is the only thing protecting it.
 #
 # Read-only mount: this container serves files and has no business writing any.
 

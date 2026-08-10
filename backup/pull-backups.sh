@@ -5,17 +5,15 @@
 # Run by launchd daily (see com.mathslug.pi-backup.plist), or by hand:
 #     ~/src/rpi/backup/pull-backups.sh
 #
-# Constraints to preserve when changing this:
+# Constraints to preserve:
 #
-#   * Pull, not push. The Mac sleeps and moves; a push would fail silently
-#     whenever the laptop was closed.
-#   * VACUUM INTO, never cp. SQLite runs in WAL mode, so copying the database
-#     file alone yields a valid but silently empty database.
-#   * The snapshot script lives in each app's repo — it runs in that app's
-#     runtime.
-#   * Dated snapshots, never a mirror. A mirror replicates corruption over the
+#   * Pull, not push — the workstation sleeps and moves.
+#   * VACUUM INTO, never cp: WAL means copying the database file alone yields a
+#     valid but silently empty one.
+#   * The snapshot script lives in each app's repo; it runs in that runtime.
+#   * Dated snapshots, never a mirror — a mirror replicates corruption over the
 #     last good copy.
-#   * Verify the copy that was kept, not the Pi's original.
+#   * Verify the copy that was kept, not the original.
 
 set -euo pipefail
 
@@ -46,8 +44,7 @@ notify() {
     >/dev/null 2>&1 || true
 }
 
-# fail() aborts the run, for conditions that doom every app. app_fail() gives up
-# on one app and lets the rest continue. Either way the run exits non-zero.
+# fail() aborts the run; app_fail() gives up on one app. Both exit non-zero.
 fail() { log "FAILED: $*"; notify "$*"; exit 1; }
 app_fail() { log "FAILED: $*"; return 1; }
 FAILED_APPS=""
@@ -56,9 +53,8 @@ mkdir -p "${DEST}/daily" "${DEST}/weekly"
 
 log "=== backup run ${STAMP} ==="
 
-# LAN first, Cloudflare tunnel second. `timeout` rather than ConnectTimeout
-# alone: with an expired Access token `cloudflared access ssh` blocks waiting
-# for a browser login, and this runs unattended at 06:00.
+# LAN first, tunnel second. `timeout`, not just ConnectTimeout: with an expired
+# Access token `cloudflared access ssh` blocks on a browser login nobody answers.
 TIMEOUT_BIN=$(command -v timeout || command -v gtimeout || true)
 try_host() {
   if [ -n "$TIMEOUT_BIN" ]; then
@@ -87,8 +83,7 @@ backup_app() {
   # not database-specific still runs.
   if [ -n "${BACKUP_DB:-}" ]; then
 
-  # 1. Snapshot inside the app's container, so it sees the file the app has
-  #    open. Keep the command in a script rather than inline — a nested-quoted
+  # 1. Snapshot inside the app's container. Keep it in a script: a nested-quoted
   #    one-liner through ssh breaks silently.
   ssh -o BatchMode=yes "$PI" "cd /tmp && sudo -u podsvc env HOME=/home/podsvc \
       XDG_RUNTIME_DIR=/run/user/1001 podman exec ${APP} ${BACKUP_SNAPSHOT_CMD}" \
@@ -121,9 +116,8 @@ backup_app() {
   chmod 600 "${RUN}/${APP}/env"
   [ -s "${RUN}/${APP}/env" ] || { app_fail "${APP}: env file came back empty"; return 1; }
 
-  # 4. Verify the copy that was kept, and fail rather than keep a file that only
-  #    looks like a backup. python3 rather than each app's own runtime, so one
-  #    verifier covers every app.
+  # 4. Verify what was kept, not the original. python3, so one verifier covers
+  #    every app.
   if [ -z "${BACKUP_DB:-}" ]; then
     log "${APP}: ok — no database; env and ${FILES} file(s)"
     log "${APP}: size=$(du -sh "${RUN}/${APP}" | cut -f1)"
@@ -156,14 +150,12 @@ PY
   log "${APP}: files=${FILES} size=$(du -sh "${RUN}/${APP}" | cut -f1)"
 }
 
-# Apps come from apps/*.conf, so a new app is backed up as soon as its config
-# exists — including before it is deployed, which is why one app's failure must
-# not abort the rest.
+# From apps/*.conf, so a new app is covered as soon as its config exists —
+# including before it is deployed, hence per-app failure isolation.
 for APP in $(appconf_list); do
   log "--- ${APP} ---"
-  # Leave nothing behind for an app that failed: a directory here always means a
-  # complete, verified backup. Later runs never revisit this one, so a fragment
-  # would survive as that date's only restore point.
+  # A directory here always means a complete, verified backup. Later runs write
+  # new dated directories, so a fragment would survive as that date's copy.
   backup_app "$APP" || { rm -rf "${RUN:?}/${APP}"; FAILED_APPS="${FAILED_APPS} ${APP}"; }
 done
 
@@ -205,15 +197,10 @@ prune() {
     done
   fi
 }
-# Collapse each day to its newest run BEFORE pruning, so KEEP_DAILY counts days
-# rather than runs — otherwise several runs in one afternoon evict days of real
-# history. Iterating newest-first keeps the current run, so `latest` cannot be
-# left dangling.
-#
-# Only days that are OVER. Collapsing today would mean a run taken minutes ago
-# deletes the one before it, and the newer is not always the better: a restore
-# that silently produced an empty database would evict the good copy and keep
-# the broken one. That is the mirror behaviour dated snapshots exist to avoid.
+# Collapse each finished day to its newest run before pruning, so KEEP_DAILY
+# counts days not runs. Only finished days: collapsing today would let a run
+# taken minutes ago delete the one before it, and newer is not always better —
+# a restore that produced an empty database would evict the good copy.
 collapse_same_day() {
   local dir="$1" d day prev="" today; today=$(date +%Y-%m-%d)
   for d in $(ls -1 "$dir" 2>/dev/null | sort -r); do
@@ -233,19 +220,17 @@ prune "${DEST}/weekly" "$KEEP_WEEKLY"
 [ -e "$LATEST" ] || ln -s "$RUN" "$LATEST"
 
 if [ -n "$FAILED_APPS" ]; then
-  # The apps that succeeded keep their snapshot, but the receipt below is NOT
-  # written: the Pi's dashboard keeps ageing "Last backup" until every app is
-  # covered again.
+  # Successful apps keep their snapshot, but the receipt is NOT written, so the
+  # dashboard keeps ageing "Last backup" until every app is covered.
   log "=== INCOMPLETE — no backup for:${FAILED_APPS} ==="
   log "=== total $(du -sh "$DEST" | cut -f1) in ${DEST} ==="
   notify "no backup for:${FAILED_APPS}"
   exit 1
 fi
 
-# Receipt for the Pi's dashboard, written only on a fully clean run. The
-# timestamp must be generated ON THE PI (note the escaped \$): the dashboard
-# subtracts it from the Pi's clock, so the Mac's clock here would measure skew
-# between two machines and can go negative.
+# Receipt for the dashboard, only on a fully clean run. The timestamp is
+# generated ON THE PI (note the escaped \$) — the dashboard subtracts it from
+# the Pi's clock, so writing this clock would measure skew and can go negative.
 ssh -o BatchMode=yes "$PI" \
   "sudo install -d -m 0755 /var/lib/rpi-health && \
    printf '%s %s\\n' \"\$(date +%s)\" \"${STAMP}\" | sudo tee /var/lib/rpi-health/last-backup >/dev/null" \

@@ -8,7 +8,7 @@
 # Polled rather than pushed because nothing can reach this machine from outside
 # — the tunnel carries inbound traffic for the apps and nothing else.
 #
-#     /opt/rpi/auto-deploy.sh whorl
+#     /opt/rpi/auto-deploy.sh <app>
 
 set -euo pipefail
 
