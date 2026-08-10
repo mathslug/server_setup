@@ -15,13 +15,16 @@ build.
 ## The whole thing
 
 ```
-ssh mypi lsblk                    # find the disk; do not guess
+ssh mypi lsblk                             # find the disk; do not guess
 
-LITE=https://downloads.raspberrypi.com/raspios_lite_arm64_latest
-
-./provision-disk.sh mypi /dev/sda "$LITE"    # erases it, reboots into it
-./bootstrap.sh      mypi --swap-mb 8192      # everything else
+./provision-disk.sh mypi /dev/sda          # erases it, reboots into it
+./bootstrap.sh      mypi --swap-mb 8192    # everything else
 ```
+
+Both default to Raspberry Pi OS Lite; pass a URL as a third argument to
+override. `provision-disk.sh` also puts cloudflared on the disk, so it comes
+back reachable from anywhere rather than only from its own LAN — which matters,
+because reaching it is what `bootstrap.sh` needs.
 
 `provision-disk.sh` writes the image, gives the disk this machine's identity —
 user, ssh host keys, wifi, hostname, timezone — reboots, and refuses to report
@@ -43,9 +46,11 @@ The SD card is a fallback, not a replica: full desktop image, ssh, and
 cloudflared on the same tunnel. No podman and no apps.
 
 ```
-FULL=https://downloads.raspberrypi.com/raspios_full_arm64_latest
-./provision-rescue.sh mypi /dev/mmcblk0 "$FULL"
+./provision-rescue.sh mypi /dev/mmcblk0
 ```
+
+Defaults to the Full desktop image — this is the disk you boot when a browser
+and a graphical wifi picker are worth having.
 
 `BOOT_ORDER=0xf14` prefers USB and falls back to the card **only when the
 primary disk is absent or unbootable**. A disk that is corrupt but still
@@ -103,7 +108,7 @@ the rescue card with the primary disk wiped:
 ```
 ./backup/pull-backups.sh                     # immediately before — the next step erases
 # unplug the primary disk, power-cycle onto the card
-./provision-disk.sh mypi /dev/sda "$LITE"
+./provision-disk.sh mypi /dev/sda
 ./bootstrap.sh      mypi --swap-mb 8192
 ```
 

@@ -21,9 +21,11 @@
 
 set -euo pipefail
 
-HOST="${1:?usage: $0 <host> <disk> <image-url> [credentials-dir]}"
-DISK="${2:?usage: $0 <host> <disk> <image-url> [credentials-dir]}"
-IMG_URL="${3:?usage: $0 <host> <disk> <image-url> [credentials-dir]}"
+HOST="${1:?usage: $0 <host> <disk> [image-url] [credentials-dir]}"
+DISK="${2:?usage: $0 <host> <disk> [image-url] [credentials-dir]}"
+# Full by default: this is the disk you boot when a desktop and a browser are
+# worth having. The disk itself still has no default.
+IMG_URL="${3:-https://downloads.raspberrypi.com/raspios_full_arm64_latest}"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # From the backup rather than off the running Pi: cloudflared keeps cert.pem in

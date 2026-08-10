@@ -15,11 +15,15 @@
 
 set -euo pipefail
 
-HOST="${1:?usage: $0 <host> <disk> <image-url> [--no-tunnel]}"
-DISK="${2:?usage: $0 <host> <disk> <image-url> [--no-tunnel]}"
-IMG_URL="${3:?usage: $0 <host> <disk> <image-url> [--no-tunnel]}"
+HOST="${1:?usage: $0 <host> <disk> [image-url] [--no-tunnel]}"
+DISK="${2:?usage: $0 <host> <disk> [image-url] [--no-tunnel]}"
+# The disk has no default — a default there is a disk to erase. The image does:
+# it destroys nothing, and a long URL pasted across a line break is its own
+# class of mistake.
+IMG_URL="${3:-https://downloads.raspberrypi.com/raspios_lite_arm64_latest}"
+case "$IMG_URL" in --*) IMG_URL="https://downloads.raspberrypi.com/raspios_lite_arm64_latest" ;; esac
 TUNNEL=1
-[ "${4:-}" = "--no-tunnel" ] && TUNNEL=0
+case " $* " in *" --no-tunnel "*) TUNNEL=0 ;; esac
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-420}"

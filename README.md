@@ -7,16 +7,17 @@ runtime descriptors (`Containerfile`, Quadlet unit) live in that app's own repo.
 The Pi is not a pet. If the SD card dies, the recovery path below rebuilds it
 from a blank card without reference to anything that was on the old one.
 
-## Layout
+## Four commands
 
-Four commands, all run **on the Mac**, each taking what it operates on as an
-argument. Nothing that could erase a disk has a default.
+All run **on the Mac**. The disk is always an argument and never has a default —
+a default there is a disk to erase. The image URL does default, since it
+destroys nothing.
 
 ```
-backup/pull-backups.sh                       pull state off the Pi
-provision-disk.sh  <host> <disk> <image>     erase, image, reboot into it
-bootstrap.sh       <host>                    everything else, end to end
-provision-rescue.sh <host> <disk> <image>    the fallback card
+backup/pull-backups.sh                   pull state off the Pi
+provision-disk.sh   <host> <disk>        erase, image, reboot into it
+bootstrap.sh        <host>               everything else, end to end
+provision-rescue.sh <host> <disk>        the fallback card
 ```
 
 ## Layout
@@ -204,7 +205,7 @@ from.
 
 ```
 ./backup/pull-backups.sh
-./provision-disk.sh mypi /dev/sda "$LITE"
+./provision-disk.sh mypi /dev/sda
 ./bootstrap.sh      mypi --swap-mb 8192
 ```
 
