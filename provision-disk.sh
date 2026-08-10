@@ -15,12 +15,15 @@
 
 set -euo pipefail
 
-HOST="${1:?usage: $0 <host> <disk> <image-url>}"
-DISK="${2:?usage: $0 <host> <disk> <image-url>}"
-IMG_URL="${3:?usage: $0 <host> <disk> <image-url>}"
+HOST="${1:?usage: $0 <host> <disk> <image-url> [--no-tunnel]}"
+DISK="${2:?usage: $0 <host> <disk> <image-url> [--no-tunnel]}"
+IMG_URL="${3:?usage: $0 <host> <disk> <image-url> [--no-tunnel]}"
+TUNNEL=1
+[ "${4:-}" = "--no-tunnel" ] && TUNNEL=0
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-420}"
+CREDS="${CREDS_DIR:-${HERE}/backups/latest/host/cloudflared}"
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 ok()  { printf '   %s\n' "$*"; }
@@ -29,8 +32,23 @@ die() { printf '\nprovision-disk: %s\n' "$*" >&2; exit 1; }
 ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST" true 2>/dev/null \
   || die "cannot reach ${HOST} over ssh"
 
+# Ship the tunnel with the disk rather than installing it afterwards. Reaching
+# the machine to run bootstrap.sh is exactly what the tunnel provides, so a disk
+# that boots without it can only be rebuilt from the same LAN.
+BUNDLE_ARG=""
+if [ "$TUNNEL" = "1" ]; then
+  [ -f "${CREDS}/cert.pem" ] || die "no cert.pem in ${CREDS} (--no-tunnel to skip)"
+  ls "${CREDS}"/*.json >/dev/null 2>&1 || die "no tunnel credentials in ${CREDS}"
+  ssh "$HOST" 'rm -rf /tmp/cf-prov && mkdir -p /tmp/cf-prov'
+  scp -q "${CREDS}"/* "${HERE}/cloudflared/install.sh" \
+         "${HERE}/cloudflared/cloudflared.service" "${HOST}:/tmp/cf-prov/"
+  BUNDLE_ARG=/tmp/cf-prov
+  ok "tunnel credentials staged from ${CREDS}"
+fi
+
 say "Imaging ${DISK} on ${HOST}"
-ssh "$HOST" "sudo bash -s -- ${DISK} ${IMG_URL}" < "${HERE}/remote/provision-disk.sh"
+ssh "$HOST" "sudo bash -s -- ${DISK} ${IMG_URL} ${BUNDLE_ARG}" < "${HERE}/remote/provision-disk.sh"
+[ -z "$BUNDLE_ARG" ] || ssh "$HOST" "rm -rf ${BUNDLE_ARG}"
 
 say "Rebooting"
 ssh "$HOST" 'sudo systemctl reboot' 2>/dev/null || true

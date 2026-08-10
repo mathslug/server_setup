@@ -40,16 +40,20 @@ ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST" true 2>/dev/null \
 [ -f "${CREDS}/cert.pem" ] || die "no cert.pem in ${CREDS}"
 ls "${CREDS}"/*.json >/dev/null 2>&1 || die "no tunnel credentials (*.json) in ${CREDS}"
 
-say "Imaging ${DISK} on ${HOST}"
-ssh "$HOST" "sudo bash -s -- ${DISK} ${IMG_URL}" < "${HERE}/remote/provision-disk.sh"
-
+# cloudflared comes with the disk now — remote/provision-disk.sh installs it
+# from this bundle, the same way every other provisioned disk gets it.
 ssh "$HOST" 'rm -rf /tmp/cf-rescue && mkdir -p /tmp/cf-rescue'
-scp -q "${CREDS}"/* "${HOST}:/tmp/cf-rescue/"
+scp -q "${CREDS}"/* "${HERE}/cloudflared/install.sh" \
+       "${HERE}/cloudflared/cloudflared.service" "${HOST}:/tmp/cf-rescue/"
 
-say "Adding cloudflared and rescue tooling"
-ssh "$HOST" "sudo bash -s -- ${DISK} /tmp/cf-rescue '${TOOLS}'" <<'REMOTE'
+say "Imaging ${DISK} on ${HOST}"
+ssh "$HOST" "sudo bash -s -- ${DISK} ${IMG_URL} /tmp/cf-rescue" \
+  < "${HERE}/remote/provision-disk.sh"
+
+say "Adding rescue tooling"
+ssh "$HOST" "sudo bash -s -- ${DISK} '${TOOLS}'" <<'REMOTE'
 set -euo pipefail
-DISK="$1"; CREDS="$2"; TOOLS="$3"
+DISK="$1"; TOOLS="$2"
 MNT=/mnt/rescue
 # sda2, but mmcblk0p2 and nvme0n1p2 — a name ending in a digit takes a p.
 case "$DISK" in
@@ -58,7 +62,7 @@ case "$DISK" in
 esac
 
 cleanup() {
-  for m in "$MNT/sys" "$MNT/proc" "$MNT/dev/pts" "$MNT/dev" "$MNT/opt/rpi" "$MNT"; do
+  for m in "$MNT/sys" "$MNT/proc" "$MNT/dev/pts" "$MNT/dev" "$MNT"; do
     mountpoint -q "$m" && umount -l "$m"
   done
   return 0
@@ -80,15 +84,6 @@ chroot "$MNT" apt-get -qq update >/dev/null
 # shellcheck disable=SC2086
 chroot "$MNT" env DEBIAN_FRONTEND=noninteractive apt-get -y -qq install $TOOLS >/dev/null
 printf '   tools: %s\n' "$TOOLS"
-
-# install.sh reads cloudflared.service from its own directory, so the repo has
-# to be visible inside the chroot at the path it will run from.
-mkdir -p "$MNT/opt/rpi" "$MNT/tmp/cf"
-mount --bind /opt/rpi "$MNT/opt/rpi"
-cp "$CREDS"/cert.pem "$CREDS"/*.json "$MNT/tmp/cf/"
-[ -f "${CREDS}/config.yml" ] && cp "${CREDS}/config.yml" "$MNT/tmp/cf/"
-chroot "$MNT" /opt/rpi/cloudflared/install.sh /tmp/cf | sed 's/^/   /'
-rm -rf "$MNT/tmp/cf"
 REMOTE
 ssh "$HOST" 'rm -rf /tmp/cf-rescue'
 

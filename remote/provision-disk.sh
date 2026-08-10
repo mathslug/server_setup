@@ -22,8 +22,12 @@
 
 set -euo pipefail
 
-DISK="${1:?usage: $0 <disk> <image-url>}"
-IMG_URL="${2:?usage: $0 <disk> <image-url>}"
+DISK="${1:?usage: $0 <disk> <image-url> [tunnel-bundle-dir]}"
+IMG_URL="${2:?usage: $0 <disk> <image-url> [tunnel-bundle-dir]}"
+# A directory holding cloudflared's install.sh, cloudflared.service, and the
+# tunnel credentials. Optional, but without it the disk boots reachable only
+# from the LAN — see the cloudflared section below.
+BUNDLE="${3:-}"
 WHO="${SUDO_USER:-$(id -un)}"
 MNT=/mnt/newroot
 
@@ -179,6 +183,23 @@ fi
 sed -i 's#init=/usr/lib/raspberrypi-sys-mods/firstboot ##' "$MNT/boot/firmware/cmdline.txt"
 ok "$(tr ' ' '\n' < "$MNT/boot/firmware/cmdline.txt" | grep PARTUUID)"
 
+# The disk has to come up reachable from OFF the LAN, not just on it. Without
+# this the tunnel is installed later by bootstrap.sh — which is too late, since
+# reaching the machine to run bootstrap is the thing the tunnel provides. A
+# rebuild driven from anywhere but the same network would strand it.
+if [ -n "$BUNDLE" ]; then
+  say "Tunnel"
+  [ -f "${BUNDLE}/cert.pem" ] || die "no cert.pem in ${BUNDLE}"
+  # The chroot inherits no resolver, so apt and curl inside it fail on DNS
+  # rather than on anything that names the problem.
+  cp /etc/resolv.conf "$MNT/etc/resolv.conf"
+  rm -rf "$MNT/tmp/cf"; mkdir -p "$MNT/tmp/cf"
+  cp "$BUNDLE"/* "$MNT/tmp/cf/"
+  chmod +x "$MNT/tmp/cf/install.sh"
+  chroot "$MNT" /tmp/cf/install.sh /tmp/cf | sed 's/^/   /'
+  rm -rf "$MNT/tmp/cf"
+fi
+
 say "Verifying"
 [ -s "${MNT}/home/${WHO}/.ssh/authorized_keys" ] || die "authorized_keys did not land"
 chroot "$MNT" id "$WHO" >/dev/null            || die "user was not created"
@@ -196,6 +217,10 @@ grep -q 'WirelessEnabled=true' "$MNT/var/lib/NetworkManager/NetworkManager.state
 [ -e "$MNT/etc/systemd/system/userconfig.service" ] \
   || [ ! -e "$MNT/lib/systemd/system/userconfig.service" ] \
   || die "the first-boot wizard is not masked and would block the console"
+if [ -n "$BUNDLE" ]; then
+  [ -L "$MNT/etc/systemd/system/multi-user.target.wants/cloudflared.service" ] \
+    || die "cloudflared is not enabled — the disk would boot reachable only from the LAN"
+fi
 ok "ok"
 
 sync
