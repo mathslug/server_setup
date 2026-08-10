@@ -58,6 +58,20 @@ if [ "${VERSION_ID:-0}" -lt 13 ] 2>/dev/null; then
   ok "         Quadlet units in this repo will not work until you reach trixie."
 fi
 
+# Before apt, and not optional. A Pi has no RTC, so a fresh image boots with
+# the clock at its build date; apt then rejects the archive signature as "not
+# live until" a date it believes is in the future, skips that repository, falls
+# back to the stale index the image shipped with, and the install 404s on
+# versions that have since moved. The symptom names packages, not time.
+if [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" != "yes" ]; then
+  sudo systemctl start systemd-timesyncd 2>/dev/null || true
+  for _ in $(seq 1 40); do
+    [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = "yes" ] && break
+    sleep 3
+  done
+fi
+ok "clock: $(date -u +%Y-%m-%dT%H:%M:%SZ) (synchronized: $(timedatectl show -p NTPSynchronized --value 2>/dev/null))"
+
 # A fresh image carries package lists from the day it was built, and the
 # versions they name are gone from the mirrors, so the first install 404s.
 sudo DEBIAN_FRONTEND=noninteractive apt-get -qq update
