@@ -192,8 +192,8 @@ fi
 say "Packages"
 # ---------------------------------------------------------------------------
 sudo DEBIAN_FRONTEND=noninteractive apt-get -y install \
-  podman uidmap passt netavark aardvark-dns git smartmontools >/dev/null
-ok "podman $(podman --version | awk '{print $3}'), smartmontools"
+  podman uidmap passt netavark aardvark-dns git >/dev/null
+ok "podman $(podman --version | awk '{print $3}')"
 
 # ---------------------------------------------------------------------------
 say "Service account: ${SERVICE_USER}"
