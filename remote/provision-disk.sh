@@ -33,6 +33,14 @@ ok()  { printf '   %s\n' "$*"; }
 
 [ "$(id -u)" = 0 ] || die "run with sudo"
 [ -b "$DISK" ] || die "$DISK is not a block device"
+
+# Partition naming is not uniform: /dev/sda gives sda1, but a device whose name
+# already ends in a digit takes a p — mmcblk0p1, nvme0n1p1. Getting this wrong
+# produces "/dev/mmcblk02", which merely does not exist.
+case "$DISK" in
+  *[0-9]) BOOT="${DISK}p1"; ROOT="${DISK}p2" ;;
+  *)      BOOT="${DISK}1";  ROOT="${DISK}2"  ;;
+esac
 case "$(findmnt -no SOURCE /)" in
   "${DISK}"*) die "$DISK holds the running root filesystem" ;;
 esac
@@ -62,14 +70,14 @@ ok "$PARTUUID"
 say "Growing the root partition to fill the disk"
 parted -s "$DISK" resizepart 2 100%
 partprobe "$DISK"; sleep 2
-e2fsck -fp "${DISK}2" || true
-resize2fs "${DISK}2" >/dev/null
-ok "$(lsblk -dno SIZE "${DISK}2" | tr -d ' ')"
+e2fsck -fp "$ROOT" || true
+resize2fs "$ROOT" >/dev/null
+ok "$(lsblk -dno SIZE "$ROOT" | tr -d ' ')"
 
 say "Mounting"
 mkdir -p "$MNT"
-mount "${DISK}2" "$MNT"
-mount "${DISK}1" "$MNT/boot/firmware"
+mount "$ROOT" "$MNT"
+mount "$BOOT" "$MNT/boot/firmware"
 mount --bind /dev "$MNT/dev"
 mount --bind /dev/pts "$MNT/dev/pts"
 mount --bind /proc "$MNT/proc"

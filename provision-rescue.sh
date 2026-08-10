@@ -51,6 +51,11 @@ ssh "$HOST" "sudo bash -s -- ${DISK} /tmp/cf-rescue '${TOOLS}'" <<'REMOTE'
 set -euo pipefail
 DISK="$1"; CREDS="$2"; TOOLS="$3"
 MNT=/mnt/rescue
+# sda2, but mmcblk0p2 and nvme0n1p2 — a name ending in a digit takes a p.
+case "$DISK" in
+  *[0-9]) ROOT="${DISK}p2" ;;
+  *)      ROOT="${DISK}2"  ;;
+esac
 
 cleanup() {
   for m in "$MNT/sys" "$MNT/proc" "$MNT/dev/pts" "$MNT/dev" "$MNT/opt/rpi" "$MNT"; do
@@ -61,7 +66,7 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$MNT"
-mount "${DISK}2" "$MNT"
+mount "$ROOT" "$MNT"
 mount --bind /dev "$MNT/dev"
 mount --bind /dev/pts "$MNT/dev/pts"
 mount --bind /proc "$MNT/proc"
