@@ -35,9 +35,21 @@ case " $* " in *" --reboot "*) REBOOT=1 ;; esac
 ORDER_SD=0xf41
 ORDER_USB=0xf14
 
+STAGED=/boot/firmware/pieeprom.upd
+
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 ok()  { printf '   %s\n' "$*"; }
 die() { printf '\nboot-order: %s\n' "$*" >&2; exit 1; }
+
+# --apply does not change the running EEPROM; it stages an image that the
+# firmware flashes during the next boot. Reading the active config back
+# therefore shows the OLD value and looks like the write failed — which is
+# exactly the wrong thing to believe, because a boot change is now armed.
+order_active() { ssh "$HOST" 'sudo rpi-eeprom-config' | awk -F= '/^BOOT_ORDER=/{print $2}'; }
+order_staged() {
+  ssh "$HOST" "sudo sh -c 'test -f ${STAGED} && rpi-eeprom-config ${STAGED} || true'" \
+    | awk -F= '/^BOOT_ORDER=/{print $2}'
+}
 
 describe() {
   case "$1" in
@@ -50,12 +62,16 @@ describe() {
 ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST" true 2>/dev/null \
   || die "cannot reach ${HOST} over ssh"
 
-CUR=$(ssh "$HOST" 'sudo rpi-eeprom-config' | awk -F= '/^BOOT_ORDER=/{print $2}')
+CUR=$(order_active)
 [ -n "$CUR" ] || die "no BOOT_ORDER in the bootloader config on ${HOST}"
+PENDING=$(order_staged)
 
 say "Current"
 ok "BOOT_ORDER=${CUR} — $(describe "$CUR")"
 ok "booted from $(ssh "$HOST" 'findmnt -no SOURCE /')"
+if [ -n "$PENDING" ] && [ "$PENDING" != "$CUR" ]; then
+  ok "PENDING: ${PENDING} — $(describe "$PENDING") — takes effect on the next boot"
+fi
 
 [ -n "$WANT" ] || exit 0
 
@@ -65,7 +81,7 @@ case "$WANT" in
   *)   die "second argument must be 'sd' or 'usb'" ;;
 esac
 
-if [ "$CUR" = "$NEW" ]; then
+if [ "$CUR" = "$NEW" ] && { [ -z "$PENDING" ] || [ "$PENDING" = "$NEW" ]; }; then
   ok "already ${NEW}; nothing to do"
   exit 0
 fi
@@ -87,9 +103,10 @@ ssh "$HOST" "sudo sh -c '
   rpi-eeprom-config --apply /tmp/boot.conf >/dev/null
   rm -f /tmp/boot.conf
 '"
-VERIFY=$(ssh "$HOST" 'sudo rpi-eeprom-config' | awk -F= '/^BOOT_ORDER=/{print $2}')
-[ "$VERIFY" = "$NEW" ] || die "the config still reads ${VERIFY}; nothing was staged"
-ok "staged — the EEPROM is flashed during the next boot"
+VERIFY=$(order_staged)
+[ "$VERIFY" = "$NEW" ] || die "the staged image reads '${VERIFY}'; nothing was armed"
+ok "staged — active is still ${CUR}; the EEPROM is flashed during the next boot"
+ok "to cancel before then: ssh ${HOST} 'sudo rm -f ${STAGED}'"
 
 if [ "$REBOOT" = "1" ]; then
   say "Rebooting"
