@@ -62,13 +62,29 @@ ssh "$HOST" "bash -s -- ${SWAP_ARGS[*]}" < "${HERE}/remote/setup.sh"
 
 # Asked of the kernel rather than parsed out of the log above: the controller
 # either shows up in the running kernel or it does not.
-if ! ssh "$HOST" 'grep -q memory /sys/fs/cgroup/cgroup.controllers'; then
+#
+# "yes", "no" and "could not ask" are three different answers. Over the tunnel
+# the third is common for a minute after a reboot, while cloudflared
+# reconnects, and reporting it as "no" turns a wait into a false alarm about
+# memory limits being ignored.
+cgroup_state() {
+  ssh -o BatchMode=yes -o ConnectTimeout=15 "$HOST" \
+    'grep -q memory /sys/fs/cgroup/cgroup.controllers && echo yes || echo no' 2>/dev/null \
+    || echo unreachable
+}
+
+if [ "$(cgroup_state)" != "yes" ]; then
   say "Rebooting for the memory cgroup"
   ssh "$HOST" 'sudo systemctl reboot' 2>/dev/null || true
   sleep 20
   wait_for_host
-  ssh "$HOST" 'grep -q memory /sys/fs/cgroup/cgroup.controllers' \
-    || die "the memory cgroup is still not active after a reboot; container limits would be silently ignored"
+  DEADLINE=$(( $(date +%s) + 180 ))
+  until [ "$(cgroup_state)" = "yes" ]; do
+    [ "$(cgroup_state)" != "no" ] || die \
+      "the memory cgroup is still not active after a reboot; container limits would be silently ignored"
+    [ "$(date +%s)" -lt "$DEADLINE" ] || die "${HOST} did not answer after the reboot"
+    sleep 15
+  done
   ok "active"
 fi
 
