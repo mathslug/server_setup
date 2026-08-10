@@ -36,6 +36,7 @@ ORDER_SD=0xf41
 ORDER_USB=0xf14
 
 STAGED=/boot/firmware/pieeprom.upd
+BOOT_TIMEOUT="${BOOT_TIMEOUT:-420}"
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 ok()  { printf '   %s\n' "$*"; }
@@ -108,10 +109,29 @@ VERIFY=$(order_staged)
 ok "staged — active is still ${CUR}; the EEPROM is flashed during the next boot"
 ok "to cancel before then: ssh ${HOST} 'sudo rm -f ${STAGED}'"
 
-if [ "$REBOOT" = "1" ]; then
-  say "Rebooting"
-  ssh "$HOST" 'sudo systemctl reboot' 2>/dev/null || true
-  ok "wait for it to come back, then check with: $0 ${HOST}"
-else
+if [ "$REBOOT" != "1" ]; then
   ok "not rebooting; run '${0} ${HOST} ${WANT} --reboot' or reboot when ready"
+  exit 0
 fi
+
+say "Rebooting"
+ssh "$HOST" 'sudo systemctl reboot' 2>/dev/null || true
+
+# A moment's grace: the old sshd dies mid-command, and answering before it has
+# gone would mean verifying the machine we are trying to leave.
+sleep 20
+DEADLINE=$(( $(date +%s) + BOOT_TIMEOUT ))
+until ssh -o BatchMode=yes -o ConnectTimeout=5 "$HOST" true 2>/dev/null; do
+  [ "$(date +%s)" -lt "$DEADLINE" ] || die \
+"${HOST} did not come back within ${BOOT_TIMEOUT}s.
+
+   The preferred disk may boot badly rather than not at all, in which case the
+   firmware sticks with it instead of falling through. Unplug it and
+   power-cycle onto the other one."
+  sleep 10
+done
+
+say "Verifying"
+ok "active BOOT_ORDER=$(order_active)"
+ok "booted from $(ssh "$HOST" 'findmnt -no SOURCE /')"
+ok "$(ssh "$HOST" 'df -h / | awk "NR==2{print \$2\" filesystem\"}"')"

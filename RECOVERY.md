@@ -15,20 +15,25 @@ build.
 ## The whole thing
 
 ```
-ssh mypi lsblk                             # find the disk; do not guess
+ssh mypi lsblk                              # find the disk; do not guess
 
-./provision-disk.sh mypi /dev/sda          # erases it, reboots into it
-./bootstrap.sh      mypi --swap-mb 8192    # everything else
+./provision-disk.sh mypi /dev/sda           # erases and images it
+./boot-order.sh     mypi usb --reboot       # boot it
+./bootstrap.sh      mypi --swap-mb 8192     # everything else
 ```
 
-Both default to Raspberry Pi OS Lite; pass a URL as a third argument to
+`provision-disk.sh` makes a disk bootable and stops. It never reboots, because
+which disk boots is a separate decision — that is what lets you build a rescue
+card without booting it. `boot-order.sh` makes the choice, reboots, waits, and
+reports which disk actually came up.
+
+The image defaults to Raspberry Pi OS Lite; pass a URL as a third argument to
 override. `provision-disk.sh` also puts cloudflared on the disk, so it comes
 back reachable from anywhere rather than only from its own LAN — which matters,
 because reaching it is what `bootstrap.sh` needs.
 
-`provision-disk.sh` writes the image, gives the disk this machine's identity —
-user, ssh host keys, wifi, hostname, timezone — reboots, and refuses to report
-success unless the Pi comes back on the disk it was told to build.
+It also gives the disk this machine's identity — user, ssh host keys, wifi,
+hostname, timezone — which is what lets it come back without a prompt.
 
 `bootstrap.sh` does the rest: packages, `podsvc`, the memory cgroup and the
 reboot it needs, swap, `/opt/rpi`, the tunnel, every app in `apps/*.conf`
@@ -36,9 +41,9 @@ reboot it needs, swap, `/opt/rpi`, the tunnel, every app in `apps/*.conf`
 pass. It is safe to re-run — it will not restore over data that is already
 there unless you pass `--force-restore`.
 
-If the Pi never comes back, it is booted from the new disk and unreachable: the
-boot order prefers it, and a disk that boots badly does not fall through. Unplug
-it, power-cycle onto the other disk, and re-run.
+If the Pi never comes back from the `boot-order.sh` step, the new disk is
+booting badly rather than not at all, so the firmware sticks with it instead of
+falling through. Unplug it, power-cycle onto the other disk, and re-run.
 
 ## The rescue card
 
@@ -136,6 +141,7 @@ the rescue card with the primary disk wiped:
 ./backup/pull-backups.sh                     # immediately before — the next step erases
 # unplug the primary disk, power-cycle onto the card
 ./provision-disk.sh mypi /dev/sda
+./boot-order.sh     mypi usb --reboot
 ./bootstrap.sh      mypi --swap-mb 8192
 ```
 
