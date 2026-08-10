@@ -30,6 +30,7 @@ WWW = ROOT / "www"
 # Written by the Mac's pull-backups.sh after a successful run. Persistent
 # rather than under /run, so a reboot is not mistaken for a missed backup.
 BACKUP_STAMP = Path("/var/lib/rpi-health/last-backup")
+RESCUE_STAMP = Path("/var/lib/rpi-health/rescue")
 
 # Backups are daily. One missed day is a laptop that stayed shut; three is a
 # habit that has broken. The gap between those two numbers is deliberate —
@@ -139,6 +140,19 @@ def backup_age():
     """
     try:
         return int(time.time()) - int(BACKUP_STAMP.read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def rescue_disk():
+    """(status, detail, age_seconds) for the fallback disk, or None if unchecked.
+
+    Written daily by check-rescue.sh rather than computed here, because it has
+    to mount a disk and this runs every five minutes.
+    """
+    try:
+        parts = RESCUE_STAMP.read_text().strip().split(maxsplit=2)
+        return parts[1], parts[2], int(time.time()) - int(parts[0])
     except (OSError, ValueError, IndexError):
         return None
 
@@ -415,8 +429,26 @@ def render(cur, hist):
                  else "warning" if bk_age < BACKUP_CRIT_S else "critical")
         bk_detail = "daily 06:00 pull to the Mac; needs the LAN or a live Access session"
 
+    # Drift only. A disk that matches may still not boot, and nothing here can
+    # tell you that — pulling the primary and booting it is the only proof.
+    rd = rescue_disk()
+    if rd is None:
+        rescue_row = row("Rescue disk", "unchecked", "no check has run yet", "warning")
+    else:
+        rd_status, rd_detail, rd_age = rd
+        if rd_age > 3 * 86400:
+            rescue_row = row("Rescue disk", "check is stale",
+                             f"last checked {human_dt(rd_age)} ago", "warning")
+        else:
+            rescue_row = row(
+                "Rescue disk",
+                {"ok": "in sync", "stale": "STALE", "absent": "not present"}.get(rd_status, rd_status),
+                f"{rd_detail} · only booting it proves it works",
+                {"ok": "good", "stale": "warning", "absent": "warning"}.get(rd_status, "warning"))
+
     rows = "\n".join(app_rows + [
         row("Last backup", bk_val, bk_detail, bk_st),
+        rescue_row,
         row("cloudflared", cur["tunnel"], "tunnel", "good" if cur["tunnel"] == "active" else "critical"),
         row("Power / thermal", cur["throttled"],
             "0x0 is healthy; anything else means undervoltage or throttling",

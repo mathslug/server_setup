@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily check that the rescue disk still matches this machine
+
+[Timer]
+OnBootSec=15min
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,13 @@
+# Compare the fallback disk against the running system.
+#
+# Daily, not on the health timer: this mounts a disk, and what it looks for
+# changes about twice a year.
+
+[Unit]
+Description=Check the rescue disk still matches this machine
+ConditionPathExists=/opt/rpi/monitor/check-rescue.sh
+
+[Service]
+Type=oneshot
+ExecStart=/opt/rpi/monitor/check-rescue.sh
+TimeoutStartSec=2min

@@ -200,6 +200,11 @@ if [ -n "$BUNDLE" ]; then
   rm -rf "$MNT/tmp/cf"
 fi
 
+# Read by monitor/check-rescue.sh to age the disk. An image that never boots
+# never takes a security update, so how old it is matters as much as whether
+# its contents still match.
+printf '%s %s\n' "$(date +%s)" "$IMG_URL" > "$MNT/etc/rpi-provisioned"
+
 say "Verifying"
 [ -s "${MNT}/home/${WHO}/.ssh/authorized_keys" ] || die "authorized_keys did not land"
 chroot "$MNT" id "$WHO" >/dev/null            || die "user was not created"

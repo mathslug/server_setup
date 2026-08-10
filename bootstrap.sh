@@ -159,10 +159,12 @@ done
 # --- Units and timers -------------------------------------------------------
 say "Units and timers"
 ssh "$HOST" 'sudo /opt/rpi/systemd/install-units.sh' | sed 's/^/   /'
-ssh "$HOST" "sudo systemctl enable --now rpi-selfupdate.timer rpi-health.timer" >/dev/null 2>&1
-# Once, now: the timer is every 5 minutes, and until it fires the dashboard
-# serves an empty directory.
+ssh "$HOST" "sudo systemctl enable --now rpi-selfupdate.timer rpi-health.timer rpi-rescue-check.timer" >/dev/null 2>&1
+# Once, now: the health timer is every five minutes and the rescue check is
+# daily, so without this the dashboard serves an empty directory and then an
+# unchecked rescue row for most of a day.
 ssh "$HOST" 'sudo systemctl start rpi-health.service' >/dev/null 2>&1 || true
+ssh "$HOST" 'sudo systemctl start rpi-rescue-check.service' >/dev/null 2>&1 || true
 for APP in "${APPS[@]}"; do
   ssh "$HOST" "sudo systemctl enable --now autodeploy@${APP}.timer" >/dev/null 2>&1 \
     && ok "autodeploy@${APP}.timer"
