@@ -124,6 +124,18 @@ while read -r a; do APPS+=("$a"); done < <(appconf_list)
 for APP in "${APPS[@]}"; do
   say "App: ${APP}"
   appconf_load "$APP"
+
+  # Asked BEFORE deploying, and this ordering is the whole point: deploying
+  # starts the app, which creates an empty database, and a check afterwards
+  # sees a non-empty file and concludes there is data worth protecting. That
+  # skipped the restore on a genuine rebuild and left the app empty while
+  # bootstrap reported success.
+  HAD_DATA=no
+  if [ -n "${BACKUP_DB:-}" ] \
+    && ssh "$HOST" "sudo test -s ${DATA_DIR}/${BACKUP_DB}" 2>/dev/null; then
+    HAD_DATA=yes
+  fi
+
   if ! ssh "$HOST" "sudo /opt/rpi/deploy-app.sh ${APP}" 2>&1 | tail -20; then
     case "$REPO" in
       git@*|ssh://*)
@@ -134,17 +146,13 @@ for APP in "${APPS[@]}"; do
       *) warn "${APP}: deploy reported a problem; continuing to the restore" ;;
     esac
   fi
-  # Restore only onto an empty app. This script has to be safe to re-run
-  # against a healthy machine, and an unconditional restore would silently roll
-  # the database back to the last backup — turning a routine re-run into data
-  # loss. --force-restore is the deliberate way to overwrite live data.
-  if [ "$FORCE_RESTORE" = "1" ]; then
+  # Restore only onto an app that had no data before this run. Re-running
+  # against a healthy machine must not roll the database back to the last
+  # backup; --force-restore is the deliberate way to overwrite live data.
+  if [ "$FORCE_RESTORE" = "1" ] || [ "$HAD_DATA" = "no" ]; then
     "${HERE}/backup/restore.sh" "$APP"
-  elif [ -n "${BACKUP_DB:-}" ] \
-    && ssh "$HOST" "sudo test -s ${DATA_DIR}/${BACKUP_DB}" 2>/dev/null; then
-    ok "${APP}: data already present, not restoring (--force-restore to overwrite)"
   else
-    "${HERE}/backup/restore.sh" "$APP"
+    ok "${APP}: data already present, not restoring (--force-restore to overwrite)"
   fi
 done
 
@@ -171,6 +179,24 @@ for APP in "${APPS[@]}"; do
     200|302) ok "${APP}: ${CODE} ${PUBLIC_URL}" ;;
     *) warn "${APP}: ${CODE} ${PUBLIC_URL}"; FAILED=1 ;;
   esac
+done
+
+# Printing row counts is not checking them. The drill that found this printed
+# "posts=0" and reported success, because nothing compared the live database
+# against the backup it was supposed to have come from.
+for APP in "${APPS[@]}"; do
+  appconf_load "$APP"
+  [ -n "${BACKUP_DB:-}" ] || continue
+  GZ="${REPO_ROOT_BACKUP:-${HERE}/backups/latest}/${APP}/${BACKUP_DB}.gz"
+  [ -f "$GZ" ] || continue
+  WANT=$(gzip -l "$GZ" 2>/dev/null | awk 'NR==2{print $2}')
+  GOT=$(ssh "$HOST" "sudo stat -c %s ${DATA_DIR}/${BACKUP_DB} 2>/dev/null || echo 0")
+  if [ -n "$WANT" ] && [ "$WANT" -gt 0 ] && [ "$GOT" -lt $(( WANT * 8 / 10 )) ]; then
+    warn "${APP}: database is ${GOT} bytes against ${WANT} in the backup — the restore did not take"
+    FAILED=1
+  else
+    ok "${APP}: database ${GOT} bytes (backup holds ${WANT})"
+  fi
 done
 
 UNITS=$(ssh "$HOST" 'systemctl --failed --no-legend --plain | wc -l' | tr -d ' ')
