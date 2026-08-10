@@ -165,7 +165,13 @@ for APP in "${APPS[@]}"; do
     200|302) ok "${APP}: ${CODE} ${PUBLIC_URL}" ;;
     *) warn "${APP}: ${CODE} ${PUBLIC_URL}"; FAILED=1 ;;
   esac
+  # An app that serves but never updates looks identical to one that works,
+  # until a push does not arrive.
+  ssh "$HOST" "systemctl is-active --quiet autodeploy@${APP}.timer" 2>/dev/null \
+    || { warn "${APP}: autodeploy@${APP}.timer is not active — pushes will not deploy"; FAILED=1; }
 done
+ssh "$HOST" 'systemctl is-active --quiet rpi-selfupdate.timer' 2>/dev/null \
+  || { warn "rpi-selfupdate.timer is not active — /opt/rpi will not track this repo"; FAILED=1; }
 
 # Printing row counts is not checking them: a rebuild once printed "posts=0"
 # and reported success.
