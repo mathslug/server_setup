@@ -194,9 +194,6 @@ would be a disk to erase.
 
 ```
 ssh mypi lsblk                    # which one is it? /dev/sda, /dev/mmcblk0 …
-
-LITE=https://downloads.raspberrypi.com/raspios_lite_arm64_latest
-FULL=https://downloads.raspberrypi.com/raspios_full_arm64_latest
 ```
 
 **Back up first, while the old system is still the running one.** Once the Pi
