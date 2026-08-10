@@ -87,6 +87,18 @@ ssh "$HOST" 'systemctl is-active --quiet cloudflared' \
   || die "cloudflared did not come up; the apps would be unreachable"
 ok "cloudflared active"
 
+# --- Units ------------------------------------------------------------------
+# Before the apps, because deploy-app.sh enables autodeploy@<app>.timer and can
+# only do that once the template exists. Afterwards it prints a note saying so,
+# and the timer has to be enabled again from here.
+say "Units and timers"
+ssh "$HOST" 'sudo /opt/rpi/systemd/install-units.sh' | sed 's/^/   /'
+ssh "$HOST" "sudo systemctl enable --now rpi-selfupdate.timer rpi-health.timer rpi-rescue-check.timer" >/dev/null 2>&1
+# Once now, or the dashboard serves an empty page and an unchecked rescue row.
+ssh "$HOST" 'sudo systemctl start rpi-health.service' >/dev/null 2>&1 || true
+ssh "$HOST" 'sudo systemctl start rpi-rescue-check.service' >/dev/null 2>&1 || true
+ok "rpi-selfupdate.timer, rpi-health.timer, rpi-rescue-check.timer"
+
 # --- Apps -------------------------------------------------------------------
 # A rebuilt disk has a new podsvc key, so a private repo's old one is dead.
 # deploy-app.sh generates the replacement; rotate it and retry. Public repos
@@ -142,19 +154,6 @@ for APP in "${APPS[@]}"; do
     ok "${APP}: data already present, not restoring (--force-restore to overwrite)"
   fi
 done
-
-# --- Units and timers -------------------------------------------------------
-say "Units and timers"
-ssh "$HOST" 'sudo /opt/rpi/systemd/install-units.sh' | sed 's/^/   /'
-ssh "$HOST" "sudo systemctl enable --now rpi-selfupdate.timer rpi-health.timer rpi-rescue-check.timer" >/dev/null 2>&1
-# Once now, or the dashboard serves an empty page and an unchecked rescue row.
-ssh "$HOST" 'sudo systemctl start rpi-health.service' >/dev/null 2>&1 || true
-ssh "$HOST" 'sudo systemctl start rpi-rescue-check.service' >/dev/null 2>&1 || true
-for APP in "${APPS[@]}"; do
-  ssh "$HOST" "sudo systemctl enable --now autodeploy@${APP}.timer" >/dev/null 2>&1 \
-    && ok "autodeploy@${APP}.timer"
-done
-ok "rpi-selfupdate.timer, rpi-health.timer"
 
 # --- Verify -----------------------------------------------------------------
 say "Verify"
