@@ -158,6 +158,21 @@ done
 # --- Verify -----------------------------------------------------------------
 say "Verify"
 FAILED=0
+
+# `is-active --quiet` exits non-zero for both "it is off" and "I could not ask",
+# and over the tunnel the second happens often enough to matter. Reporting a
+# dropped connection as a dead timer is a false alarm; reporting it as fine is
+# worse. Ask for the state as a value and keep the two apart.
+check_unit() {
+  local unit="$1" consequence="$2" state
+  state=$(ssh -o BatchMode=yes -o ConnectTimeout=15 "$HOST" \
+            "systemctl is-active ${unit} 2>/dev/null || true" 2>/dev/null) || state=""
+  case "${state:-unreachable}" in
+    active)      ok "${unit}: active" ;;
+    unreachable) warn "${unit}: could not check — ${HOST} did not answer" ;;
+    *)           warn "${unit}: ${state} — ${consequence}"; FAILED=1 ;;
+  esac
+}
 for APP in "${APPS[@]}"; do
   appconf_load "$APP"
   CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 60 "$PUBLIC_URL" || echo 000)
@@ -167,11 +182,9 @@ for APP in "${APPS[@]}"; do
   esac
   # An app that serves but never updates looks identical to one that works,
   # until a push does not arrive.
-  ssh "$HOST" "systemctl is-active --quiet autodeploy@${APP}.timer" 2>/dev/null \
-    || { warn "${APP}: autodeploy@${APP}.timer is not active — pushes will not deploy"; FAILED=1; }
+  check_unit "autodeploy@${APP}.timer" "${APP}: pushes will not deploy"
 done
-ssh "$HOST" 'systemctl is-active --quiet rpi-selfupdate.timer' 2>/dev/null \
-  || { warn "rpi-selfupdate.timer is not active — /opt/rpi will not track this repo"; FAILED=1; }
+check_unit rpi-selfupdate.timer "/opt/rpi will not track this repo"
 
 # Printing row counts is not checking them: a rebuild once printed "posts=0"
 # and reported success.
