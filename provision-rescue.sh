@@ -12,45 +12,30 @@
 # bad enough that a desktop and a browser are worth having, and the card has
 # room to spare.
 #
-# Unlike provision-disk.sh this does NOT reboot. The primary disk stays the
-# running system; the card sits there until it is needed.
+# A rescue card is an ordinary provisioned disk plus tooling, so the imaging is
+# provision-disk.sh — same identity, same tunnel, same checks. All this adds is
+# the packages worth having when you are booting it because something is wrong.
 #
 # BOOT_ORDER falls through to the card only when the primary is absent or
 # unbootable. A disk that is corrupt but still presents a boot partition will
 # hang instead, so this is a way back in rather than automatic failover.
+# boot-order.sh is the lever for that case.
 
 set -euo pipefail
 
-HOST="${1:?usage: $0 <host> <disk> [image-url] [credentials-dir]}"
-DISK="${2:?usage: $0 <host> <disk> [image-url] [credentials-dir]}"
+HOST="${1:?usage: $0 <host> <disk> [image-url]}"
+DISK="${2:?usage: $0 <host> <disk> [image-url]}"
 # Full by default: this is the disk you boot when a desktop and a browser are
 # worth having. The disk itself still has no default.
 IMG_URL="${3:-https://downloads.raspberrypi.com/raspios_full_arm64_latest}"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# From the backup rather than off the running Pi: cloudflared keeps cert.pem in
-# /root/.cloudflared and the tunnel credentials in /etc/cloudflared, and the
-# backup is the one place all of it sits together.
-CREDS="${4:-${HERE}/backups/latest/host/cloudflared}"
 TOOLS="${RESCUE_TOOLS:-parted fdisk e2fsprogs xz-utils curl git rsync smartmontools tmux}"
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 die() { printf '\nprovision-rescue: %s\n' "$*" >&2; exit 1; }
 
-ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST" true 2>/dev/null \
-  || die "cannot reach ${HOST} over ssh"
-[ -f "${CREDS}/cert.pem" ] || die "no cert.pem in ${CREDS}"
-ls "${CREDS}"/*.json >/dev/null 2>&1 || die "no tunnel credentials (*.json) in ${CREDS}"
-
-# cloudflared comes with the disk now — remote/provision-disk.sh installs it
-# from this bundle, the same way every other provisioned disk gets it.
-ssh "$HOST" 'rm -rf /tmp/cf-rescue && mkdir -p /tmp/cf-rescue'
-scp -q "${CREDS}"/* "${HERE}/cloudflared/install.sh" \
-       "${HERE}/cloudflared/cloudflared.service" "${HOST}:/tmp/cf-rescue/"
-
-say "Imaging ${DISK} on ${HOST}"
-ssh "$HOST" "sudo bash -s -- ${DISK} ${IMG_URL} /tmp/cf-rescue" \
-  < "${HERE}/remote/provision-disk.sh"
+"${HERE}/provision-disk.sh" "$HOST" "$DISK" "$IMG_URL" || die "imaging failed"
 
 say "Adding rescue tooling"
 ssh "$HOST" "sudo bash -s -- ${DISK} '${TOOLS}'" <<'REMOTE'
@@ -90,8 +75,8 @@ chroot "$MNT" apt-get -qq update >/dev/null
 chroot "$MNT" env DEBIAN_FRONTEND=noninteractive apt-get -y -qq install $TOOLS >/dev/null
 printf '   tools: %s\n' "$TOOLS"
 REMOTE
-ssh "$HOST" 'rm -rf /tmp/cf-rescue'
 
 say "${DISK} is a bootable rescue card"
 echo "   Full desktop image, ssh, and cloudflared on the same tunnel."
-echo "   It boots only when ${HOST}'s primary disk is absent or unbootable."
+echo "   It boots when ${HOST}'s primary disk is absent or unbootable, or when"
+echo "   you send it there: ./boot-order.sh ${HOST} sd --reboot"
