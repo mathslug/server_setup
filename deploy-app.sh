@@ -88,6 +88,10 @@ fi
 say "Source: ${REPO}"
 # ---------------------------------------------------------------------------
 if sudo test -d "${CHECKOUT}/.git"; then
+  # The conf is the source of truth for where the code comes from. An existing
+  # checkout keeps whatever remote it was cloned with, so switching a repo
+  # between ssh and https would otherwise take effect only on a rebuild.
+  asuser git -C "$CHECKOUT" remote set-url origin "$REPO"
   asuser git -C "$CHECKOUT" fetch --quiet origin "$BRANCH"
   asuser git -C "$CHECKOUT" reset --quiet --hard "origin/${BRANCH}"
   ok "updated to $(asuser git -C "$CHECKOUT" rev-parse --short HEAD)"
