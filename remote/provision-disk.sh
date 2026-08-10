@@ -22,6 +22,11 @@
 
 set -euo pipefail
 
+# ssh carries the client's LANG across, and the image being built has not
+# generated that locale yet, so perl and apt warn on every invocation inside
+# the chroot. Nothing here depends on collation or formatting.
+export LC_ALL=C LANG=C
+
 DISK="${1:?usage: $0 <disk> <image-url> [tunnel-bundle-dir]}"
 IMG_URL="${2:?usage: $0 <disk> <image-url> [tunnel-bundle-dir]}"
 # A directory holding cloudflared's install.sh, cloudflared.service, and the
