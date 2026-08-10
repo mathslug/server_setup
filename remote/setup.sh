@@ -275,8 +275,21 @@ sudo install -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0644 \
 sudo -u "$SERVICE_USER" env HOME="$SVC_HOME" \
   XDG_RUNTIME_DIR="/run/user/${SVC_UID}" \
   DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${SVC_UID}/bus" \
-  sh -c 'systemctl --user daemon-reload && systemctl --user start dashboard.service'
-ok "dashboard: $(sudo -u "$SERVICE_USER" env XDG_RUNTIME_DIR="/run/user/${SVC_UID}" systemctl --user is-active dashboard.service)"
+  systemctl --user daemon-reload
+
+# Only start it once the memory cgroup is live. The unit sets --memory, and
+# crun fails with "opening file memory.max: No such file or directory" when the
+# controller is absent — which it is until the reboot enabled above. Lingering
+# plus WantedBy=default.target brings it up on that reboot regardless.
+if grep -q memory /sys/fs/cgroup/cgroup.controllers; then
+  sudo -u "$SERVICE_USER" env HOME="$SVC_HOME" \
+    XDG_RUNTIME_DIR="/run/user/${SVC_UID}" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${SVC_UID}/bus" \
+    systemctl --user start dashboard.service
+  ok "dashboard: $(sudo -u "$SERVICE_USER" env XDG_RUNTIME_DIR="/run/user/${SVC_UID}" systemctl --user is-active dashboard.service)"
+else
+  ok "dashboard: installed; starts on the reboot the memory cgroup needs"
+fi
 
 # ---------------------------------------------------------------------------
 say "SSH known_hosts for github.com"
