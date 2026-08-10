@@ -6,10 +6,14 @@
 #     ./backup/restore.sh <app>        # one app
 #     ./backup/restore.sh host         # just the tunnel
 #
-# The inverse of pull-backups.sh, reading the same apps/*.conf and the same
-# backups/latest. It restores state onto a Pi that already has the apps
-# deployed — run deploy-app.sh first, or there is no unit to stop and no
-# data directory to write into.
+#     BACKUP_SRC=backups/daily/2026-08-07_235709 ./backup/restore.sh <app>
+#
+# Defaults to backups/latest, which moves with every successful run — pass
+# BACKUP_SRC to roll one app back to a dated copy while the rest stay current.
+#
+# The inverse of pull-backups.sh, reading the same apps/*.conf. It restores onto
+# a Pi that already has the apps deployed — run deploy-app.sh first, or there is
+# no unit to stop and no data directory to write into.
 #
 # Constraints to preserve:
 #

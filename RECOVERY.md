@@ -99,6 +99,14 @@ per hostname, new UUID into `config.yml`, delete the orphan.
 provision *from*. Write a card with Raspberry Pi Imager — hostname, ssh key and
 wifi in its settings — boot that, then join at step 2.
 
+**Rolling one app back.** `bootstrap.sh` always restores from `backups/latest`,
+which moves with every successful run. To put a single app back to an older
+copy, call `restore.sh` directly and leave the rest alone:
+
+```
+BACKUP_SRC=backups/daily/<dated-run> ./backup/restore.sh <app>
+```
+
 **Restoring a database by hand.** Delete the `-wal` and `-shm` alongside it
 first, or SQLite replays the empty log over what you restored. Check row counts;
 an empty table means you hit exactly that.
