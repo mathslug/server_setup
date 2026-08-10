@@ -136,6 +136,9 @@ done
 say "Units and timers"
 ssh "$HOST" 'sudo /opt/rpi/systemd/install-units.sh' | sed 's/^/   /'
 ssh "$HOST" "sudo systemctl enable --now rpi-selfupdate.timer rpi-health.timer" >/dev/null 2>&1
+# Once, now: the timer is every 5 minutes, and until it fires the dashboard
+# serves an empty directory.
+ssh "$HOST" 'sudo systemctl start rpi-health.service' >/dev/null 2>&1 || true
 for APP in "${APPS[@]}"; do
   ssh "$HOST" "sudo systemctl enable --now autodeploy@${APP}.timer" >/dev/null 2>&1 \
     && ok "autodeploy@${APP}.timer"

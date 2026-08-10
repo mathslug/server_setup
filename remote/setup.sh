@@ -237,6 +237,17 @@ sudo install -d -m 0755 /var/lib/rpi-health
 sudo install -d -m 0755 -o "$SERVICE_USER" -g "$SERVICE_USER" /var/lib/rpi-health/jobs
 ok "state: /var/lib/rpi-health (backup receipt, job receipts)"
 
+# The dashboard container bind-mounts /run/rpi-health/www, and /run is tmpfs.
+# The collector creates it, but the dashboard may well start first — on a fresh
+# disk the collector is not even installed yet — and a bind mount whose source
+# is missing fails the unit. tmpfiles.d settles it on every boot, whoever wins.
+sudo tee /etc/tmpfiles.d/rpi-health.conf >/dev/null <<'EOF'
+d /run/rpi-health     0755 root root -
+d /run/rpi-health/www 0755 root root -
+EOF
+sudo systemd-tmpfiles --create /etc/tmpfiles.d/rpi-health.conf
+ok "runtime: /run/rpi-health/www (recreated each boot)"
+
 # ---------------------------------------------------------------------------
 say "This repo, at /opt/rpi"
 # ---------------------------------------------------------------------------
