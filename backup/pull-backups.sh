@@ -17,6 +17,14 @@
 
 set -euo pipefail
 
+# launchd dark-wakes a sleeping laptop to start this, then powerd sleeps it
+# again seconds later, freezing the transfer while TCP keepalive holds the
+# socket open. Nothing in the plist prevents that; only a power assertion does.
+if [ -z "${BACKUP_CAFFEINATED:-}" ] && command -v caffeinate >/dev/null 2>&1; then
+  export BACKUP_CAFFEINATED=1
+  exec caffeinate -i -s "$0" "$@"
+fi
+
 # Set PI_HOST to force a host; otherwise chosen by the reachability check below.
 PI="${PI_HOST:-}"
 # Git-ignored; Time Machine covers it.
