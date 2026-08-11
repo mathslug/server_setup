@@ -82,6 +82,12 @@ else
 fi
 log "reaching the Pi as '${PI}'"
 
+# useradd hands out the next free uid, so podsvc is 1001 by creation order, not
+# by design. Ask for it: the wrong runtime directory means podman cannot find
+# its socket, and a rebuild is exactly when the number would change.
+SVC_UID=$(ssh -o BatchMode=yes "$PI" "id -u ${SERVICE_USER}" 2>/dev/null) \
+  || fail "cannot read ${SERVICE_USER}'s uid on ${PI}"
+
 backup_app() {
   local APP="$1"
   appconf_load "$APP"
@@ -93,8 +99,8 @@ backup_app() {
 
   # 1. Snapshot inside the app's container. Keep it in a script: a nested-quoted
   #    one-liner through ssh breaks silently.
-  ssh -o BatchMode=yes "$PI" "cd /tmp && sudo -u podsvc env HOME=/home/podsvc \
-      XDG_RUNTIME_DIR=/run/user/1001 podman exec ${APP} ${BACKUP_SNAPSHOT_CMD}" \
+  ssh -o BatchMode=yes "$PI" "cd /tmp && sudo -u ${SERVICE_USER} env HOME=${SVC_HOME} \
+      XDG_RUNTIME_DIR=/run/user/${SVC_UID} podman exec ${APP} ${BACKUP_SNAPSHOT_CMD}" \
     >/dev/null || { app_fail "${APP}: snapshot failed"; return 1; }
 
   # 2. Retrieve compressed, then delete from the Pi. gzip streams, so the SD

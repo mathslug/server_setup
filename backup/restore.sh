@@ -47,7 +47,13 @@ log "restoring to '${PI}' from ${SRC}"
 
 # Everything the service account owns has to be written as root and handed
 # over, because the login user cannot write into its home.
-AS_SVC='sudo -u podsvc env HOME=/home/podsvc XDG_RUNTIME_DIR=/run/user/1001 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus'
+#
+# The uid is asked for, not assumed: useradd hands out the next free one, so
+# podsvc is 1001 by creation order alone. Hardcoding it means a rebuild that
+# creates one more account first loses podman's socket mid-restore.
+SVC_UID=$(ssh -o BatchMode=yes "$PI" "id -u ${SERVICE_USER}" 2>/dev/null) \
+  || die "cannot read ${SERVICE_USER}'s uid on ${PI}"
+AS_SVC="sudo -u ${SERVICE_USER} env HOME=$(_svc_home) XDG_RUNTIME_DIR=/run/user/${SVC_UID} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${SVC_UID}/bus"
 
 restore_host() {
   log "--- host ---"
