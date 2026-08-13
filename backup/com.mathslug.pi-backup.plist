@@ -5,17 +5,14 @@
   Install:
     cp backup/com.mathslug.pi-backup.plist ~/Library/LaunchAgents/
     launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.mathslug.pi-backup.plist
-    sudo pmset repeat wakeorpoweron MTWRFSU 05:58:00
+    sudo pmset repeat wakeorpoweron MTWRFSU 05:59:30
 
   Run once now:
     launchctl kickstart -k gui/$UID/com.mathslug.pi-backup
 
-  The pmset line is not optional on a laptop. Left alone, launchd starts the
-  job during one of the brief background wakes a sleeping Mac takes anyway,
-  and it sleeps again seconds later with the transfer half done. On battery
-  the power assertion pull-backups.sh takes does not prevent that: on
-  2026-08-12 the assertion was held and the machine slept six seconds later
-  regardless. A scheduled wake two minutes early gives the job a real one.
+  The pmset line is not optional. Without it launchd starts the job during a
+  brief background wake, where no power assertion can hold the Mac up. Thirty
+  seconds early, not more: a scheduled wake lasts only about 80 seconds.
 
   RunAtLoad is deliberately off, so logging in repeatedly doesn't pile up
   snapshots.
