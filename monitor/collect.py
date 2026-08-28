@@ -443,7 +443,7 @@ def render(cur, hist):
             rescue_row = row(
                 "Rescue disk",
                 {"ok": "in sync", "stale": "STALE", "absent": "not present"}.get(rd_status, rd_status),
-                f"{rd_detail} · only booting it proves it works",
+                rd_detail,
                 {"ok": "good", "stale": "warning", "absent": "warning"}.get(rd_status, "warning"))
 
     rows = "\n".join(app_rows + [
@@ -451,7 +451,7 @@ def render(cur, hist):
         rescue_row,
         row("cloudflared", cur["tunnel"], "tunnel", "good" if cur["tunnel"] == "active" else "critical"),
         row("Power / thermal", cur["throttled"],
-            "0x0 is healthy; anything else means undervoltage or throttling",
+            "0x0 is healthy",
             "good" if cur["throttled"] == "0x0" else "warning"),
         row("Uptime", human_dt(cur["uptime"]), "since last boot", "good"),
     ])
