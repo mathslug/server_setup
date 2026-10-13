@@ -63,12 +63,14 @@ log "=== backup run ${STAMP} ==="
 
 # LAN first, tunnel second. `timeout`, not just ConnectTimeout: with an expired
 # Access token `cloudflared access ssh` blocks on a browser login nobody answers.
+# A Mac without coreutils has neither timeout nor gtimeout, but always has perl:
+# the alarm survives the exec, so ssh is killed the same way.
 TIMEOUT_BIN=$(command -v timeout || command -v gtimeout || true)
 try_host() {
   if [ -n "$TIMEOUT_BIN" ]; then
     "$TIMEOUT_BIN" 30 ssh -o ConnectTimeout=10 -o BatchMode=yes "$1" true 2>/dev/null
   else
-    ssh -o ConnectTimeout=10 -o BatchMode=yes "$1" true 2>/dev/null
+    perl -e 'alarm shift; exec @ARGV' 30 ssh -o ConnectTimeout=10 -o BatchMode=yes "$1" true 2>/dev/null
   fi
 }
 
