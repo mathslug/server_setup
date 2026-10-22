@@ -1,0 +1,41 @@
+# vikunja — the published image, run as is.
+#
+# Image= is the version. Bump it here and push: rpi-selfupdate brings it to
+# /opt/rpi and auto-deploy.sh redeploys when this file differs from the one
+# installed. Read the release notes first; the nightly backup is the way back.
+
+[Unit]
+Description=vikunja — tasks
+Documentation=https://vikunja.io/docs
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+ContainerName=vikunja
+Image=docker.io/vikunja/vikunja:2.7.1
+PublishPort=127.0.0.1:8003:3456
+
+# The image runs as uid 1000. keep-id maps that uid to podsvc, so the data is
+# podsvc's on the host, where the backup reads it and restore.sh writes it.
+UserNS=keep-id:uid=1000,gid=1000
+Volume=%h/data/vikunja:/data
+EnvironmentFile=%h/.config/vikunja.env
+
+# Settings live here, in git. The env file holds only the secret.
+Environment=VIKUNJA_SERVICE_PUBLICURL=https://tasks.mathslug.com/
+Environment=VIKUNJA_SERVICE_TIMEZONE=America/Chicago
+Environment=VIKUNJA_SERVICE_ENABLEREGISTRATION=false
+Environment=VIKUNJA_DATABASE_PATH=/data/vikunja.db
+Environment=VIKUNJA_FILES_BASEPATH=/data/files
+
+PodmanArgs=--memory=256m
+
+# No HealthCmd: the image has no shell, and `vikunja healthcheck` initialises
+# the whole app on every run. The dashboard polls /health instead.
+
+[Service]
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
