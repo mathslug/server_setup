@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# restore.sh — push backed-up state from this Mac back onto the Pi.
+# restore.sh — push backed-up state from this laptop back onto the Pi.
 #
 #     ./backup/restore.sh              # every app, and the tunnel
 #     ./backup/restore.sh <app>        # one app

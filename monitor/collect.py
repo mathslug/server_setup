@@ -27,7 +27,7 @@ ROOT = Path("/run/rpi-health")
 SAMPLES = ROOT / "samples.tsv"
 WWW = ROOT / "www"
 
-# Written by the Mac's pull-backups.sh after a successful run. Persistent
+# Written by the laptop's pull-backups.sh after a successful run. Persistent
 # rather than under /run, so a reboot is not mistaken for a missed backup.
 BACKUP_STAMP = Path("/var/lib/rpi-health/last-backup")
 RESCUE_STAMP = Path("/var/lib/rpi-health/rescue")
@@ -131,10 +131,11 @@ def job_state(j):
 
 
 def backup_age():
-    """Seconds since the Mac last completed a backup, or None if never.
+    """Seconds since the laptop last completed a backup, or None if never.
 
-    The backup runs on the Mac and writes this receipt over ssh at the end of a
-    successful run, so a Mac that quietly stops backing up shows up here.
+    The backup runs on the laptop and writes this receipt over ssh at the end
+    of a successful run, so a laptop that quietly stops backing up shows up
+    here.
 
     Read from /var/lib, not /run — a reboot must not read as "never backed up".
     """
@@ -422,12 +423,12 @@ def render(cur, hist):
     bk_age = cur.get("backup_age")
     if bk_age is None:
         bk_val, bk_st = "never", "critical"
-        bk_detail = "no completed backup recorded — check backups/backup.log on the Mac"
+        bk_detail = "no completed backup recorded — journalctl --user -u pi-backup on the laptop"
     else:
         bk_val = f"{human_dt(bk_age)} ago"
         bk_st = ("good" if bk_age < BACKUP_WARN_S
                  else "warning" if bk_age < BACKUP_CRIT_S else "critical")
-        bk_detail = "daily 06:00 pull to the Mac; needs the LAN or a live Access session"
+        bk_detail = "daily 06:00 pull to the laptop; needs its 30-day Access login"
 
     # Drift only. A disk that matches may still not boot, and nothing here can
     # tell you that — pulling the primary and booting it is the only proof.

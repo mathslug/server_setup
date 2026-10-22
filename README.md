@@ -39,7 +39,8 @@ apps/<name>.conf  per-app config — repo, ports, backup, health. One file
                   registers an app everywhere
 deploy-app.sh     clone and build, or pull, then start one app
 auto-deploy.sh    redeploy if the branch or unit changed; driven by a timer
-backup/           pull-backups.sh off the Pi, restore.sh back again
+backup/           pull-backups.sh off the Pi, restore.sh back again;
+                  pi-backup.timer runs the pull daily on the laptop
 monitor/          health collector, LAN dashboard, rescue-disk check
 cloudflared/      tunnel ingress, install.sh, hardened unit
 systemd/          system units + install-units.sh, which keeps
@@ -88,8 +89,9 @@ Keep two ssh aliases: direct on the LAN, and through the tunnel from anywhere.
 Give the remote one `HostKeyAlias` pointing at the LAN one, so there is a single
 trusted host key. The ssh key is still required; Access sits in front of sshd.
 
-Off-LAN backups work until the Access session expires, then fail loudly. Making
-that unattended needs a service token.
+Backups from the laptop ride the same Access login, which lasts 30 days. When
+it lapses the next run fails with a desktop notification; `ssh mypi-remote
+true` renews it.
 
 ## Deploys
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# pull-backups.sh — pull application state off the Pi onto this Mac.
+# pull-backups.sh — pull application state off the Pi onto this laptop.
 #
-# Run by launchd daily (see com.mathslug.pi-backup.plist), or by hand:
-#     ~/src/rpi/backup/pull-backups.sh
+# Run daily by pi-backup.timer (install: see pi-backup.service), or by hand:
+#     ~/src/server_setup/backup/pull-backups.sh
 #
 # Constraints to preserve:
 #
@@ -18,17 +18,9 @@
 
 set -euo pipefail
 
-# launchd dark-wakes a sleeping laptop to start this, then powerd sleeps it
-# again seconds later, freezing the transfer while TCP keepalive holds the
-# socket open. Nothing in the plist prevents that; only a power assertion does.
-if [ -z "${BACKUP_CAFFEINATED:-}" ] && command -v caffeinate >/dev/null 2>&1; then
-  export BACKUP_CAFFEINATED=1
-  exec caffeinate -i -s "$0" "$@"
-fi
-
 # Set PI_HOST to force a host; otherwise chosen by the reachability check below.
 PI="${PI_HOST:-}"
-# Git-ignored; Time Machine covers it.
+# Git-ignored.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="${BACKUP_DEST:-${REPO_ROOT}/backups}"
 # Days and weeks, not runs — see collapse_same_day().
@@ -48,8 +40,8 @@ log() { printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 # is reporting through it.
 notify() {
   [ -n "${BACKUP_NO_NOTIFY:-}" ] && return 0
-  command -v osascript >/dev/null 2>&1 || return 0
-  osascript -e "display notification \"$1\" with title \"Pi backup failed\" sound name \"Basso\"" \
+  command -v notify-send >/dev/null 2>&1 || return 0
+  notify-send --urgency=critical --app-name="Pi backup" "Pi backup failed" "$1" \
     >/dev/null 2>&1 || true
 }
 
@@ -64,15 +56,8 @@ log "=== backup run ${STAMP} ==="
 
 # LAN first, tunnel second. `timeout`, not just ConnectTimeout: with an expired
 # Access token `cloudflared access ssh` blocks on a browser login nobody answers.
-# A Mac without coreutils has neither timeout nor gtimeout, but always has perl:
-# the alarm survives the exec, so ssh is killed the same way.
-TIMEOUT_BIN=$(command -v timeout || command -v gtimeout || true)
 try_host() {
-  if [ -n "$TIMEOUT_BIN" ]; then
-    "$TIMEOUT_BIN" 30 ssh -o ConnectTimeout=10 -o BatchMode=yes "$1" true 2>/dev/null
-  else
-    perl -e 'alarm shift; exec @ARGV' 30 ssh -o ConnectTimeout=10 -o BatchMode=yes "$1" true 2>/dev/null
-  fi
+  timeout 30 ssh -o ConnectTimeout=10 -o BatchMode=yes "$1" true 2>/dev/null
 }
 
 if [ -n "$PI" ]; then
@@ -81,7 +66,8 @@ else
   for CANDIDATE in mypi mypi-remote; do
     if try_host "$CANDIDATE"; then PI="$CANDIDATE"; break; fi
   done
-  [ -n "$PI" ] || fail "cannot reach the Pi on the LAN (mypi) or the tunnel (mypi-remote)"
+  # Off the LAN, the usual cause is the 30-day Access login lapsing.
+  [ -n "$PI" ] || fail "cannot reach the Pi on the LAN (mypi) or the tunnel (mypi-remote) — if the Access login expired, \`ssh mypi-remote true\` renews it"
 fi
 log "reaching the Pi as '${PI}'"
 

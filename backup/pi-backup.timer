@@ -1,0 +1,17 @@
+# Starts pi-backup.service daily; install instructions are in that file.
+#
+# 06:00 local, after karb's 08:00 UTC daily scan. Backing up mid-scan is safe —
+# VACUUM INTO is consistent by construction — but slows both for no reason.
+# Local on purpose: this follows the laptop, not the Pi.
+
+[Unit]
+Description=Daily Pi backup pull
+
+[Timer]
+OnCalendar=*-*-* 06:00:00
+# Missed while off or asleep: run once at the next boot or wake. Once, not
+# once per missed day, so repeated logins do not pile up snapshots.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
