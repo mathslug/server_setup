@@ -63,8 +63,12 @@ try_host() {
 if [ -n "$PI" ]; then
   try_host "$PI" || fail "cannot reach ${PI} over ssh"
 else
-  for CANDIDATE in mypi mypi-remote; do
-    if try_host "$CANDIDATE"; then PI="$CANDIDATE"; break; fi
+  # Three rounds: one dropped tunnel handshake should not cost a day's backup.
+  for ROUND in 1 2 3; do
+    for CANDIDATE in mypi mypi-remote; do
+      if try_host "$CANDIDATE"; then PI="$CANDIDATE"; break 2; fi
+    done
+    [ "$ROUND" = 3 ] || sleep 20
   done
   # Off the LAN, the usual cause is the 30-day Access login lapsing.
   [ -n "$PI" ] || fail "cannot reach the Pi on the LAN (mypi) or the tunnel (mypi-remote) — if the Access login expired, \`ssh mypi-remote true\` renews it"
