@@ -6,14 +6,16 @@
 
 SERVICE_USER="${SERVICE_USER:-podsvc}"
 
-# The backup script sources this from macOS, which has no getent. The Pi's
-# layout is fixed, so the fallback path is safe.
+# The backup and restore scripts source this on the workstation, where there
+# is no podsvc — and macOS has no getent at all. An empty answer there made
+# every path /data/... and /.config/.... The Pi's layout is fixed, so the
+# fallback path is safe.
 _svc_home() {
+  local h=""
   if command -v getent >/dev/null 2>&1; then
-    getent passwd "$SERVICE_USER" | cut -d: -f6
-  else
-    printf '/home/%s' "$SERVICE_USER"
+    h=$(getent passwd "$SERVICE_USER" | cut -d: -f6) || true
   fi
+  printf '%s' "${h:-/home/${SERVICE_USER}}"
 }
 
 # Directory holding apps/*.conf, resolved relative to this file so it works
