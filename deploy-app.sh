@@ -121,8 +121,11 @@ if [ -n "${REPO:-}" ]; then
   say "Build ${IMAGE}:latest"
   # -------------------------------------------------------------------------
   # Built natively: per-architecture dependencies resolve for the host that
-  # runs them.
-  asuser podman build --quiet -t "${IMAGE}:latest" "$CHECKOUT" >/dev/null
+  # runs them. --pull=newer because the default, missing, reuses the first
+  # base image ever pulled, so Debian's security fixes never arrived — the
+  # bases were two months old when this was found. With no registry, the
+  # cached base still builds.
+  asuser podman build --pull=newer --quiet -t "${IMAGE}:latest" "$CHECKOUT" >/dev/null
   ok "built $(asuser podman image inspect "${IMAGE}:latest" --format '{{.Id}}' | cut -c1-12)"
 else
   # The unit's Image= line is the only place the version is written, so a
