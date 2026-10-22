@@ -5,7 +5,7 @@
 #     ./provision-disk.sh mypi /dev/sda \
 #       https://downloads.raspberrypi.com/raspios_lite_arm64_latest
 #
-# Run on the Mac. THE TARGET DISK IS ERASED. Find it first — `ssh mypi lsblk` —
+# Run on the laptop. THE TARGET DISK IS ERASED. Find it first — `ssh mypi lsblk` —
 # and pass it in; nothing here has a default, because a default would be a disk
 # to erase.
 #

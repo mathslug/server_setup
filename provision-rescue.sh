@@ -5,7 +5,7 @@
 #     ./provision-rescue.sh mypi /dev/mmcblk0 \
 #       https://downloads.raspberrypi.com/raspios_full_arm64_latest
 #
-# Run on the Mac. THE TARGET DISK IS ERASED, and it is the disk you fall back
+# Run on the laptop. THE TARGET DISK IS ERASED, and it is the disk you fall back
 # to, so do this only when the primary is known good.
 #
 # Point it at the FULL image, not Lite: this is what you boot when things are
