@@ -40,12 +40,24 @@ appconf_load() {
   local app="$1" f
   f="$(appconf_dir)/${app}.conf"
   [ -f "$f" ] || { echo "no config: $f" >&2; return 2; }
+  # Loops load one conf after another into the same shell, so a key one app
+  # leaves out would otherwise keep the previous app's value. An image app has
+  # no REPO, and inheriting one turns it into a repo app.
+  unset REPO BRANCH QUADLET IMAGE SERVICE DATA_SUBDIR HOSTNAME LOCAL_PORT \
+    HEALTH_PATH BACKUP_DB BACKUP_DIRS UNITS_DIR JOB_RECEIPTS ENV_TEMPLATE
   # shellcheck disable=SC1090
   . "$f"
 
   APP="$app"
   SVC_HOME="$(_svc_home)"
   CHECKOUT="${SVC_HOME}/apps/${app}"
+  # QUADLET and UNITS_DIR are relative to this: the app's own checkout when it
+  # is built from a repo, this repo when it runs a published image.
+  if [ -n "${REPO:-}" ]; then
+    SOURCE_ROOT="$CHECKOUT"
+  else
+    SOURCE_ROOT="$(dirname "$(appconf_dir)")"
+  fi
 
   # One deploy key per app, not one shared key. This is forced rather than
   # chosen: GitHub refuses to register the same public key as a deploy key on a

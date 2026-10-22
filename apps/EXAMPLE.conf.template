@@ -10,6 +10,14 @@
 # all read it, so there is no second place to remember.
 
 # ── Source ──────────────────────────────────────────────────────────────────
+# Two kinds of app:
+#
+#   repo app   — your own code. REPO is cloned and its Containerfile built on
+#                the Pi. Its unit lives in that repo, next to the code.
+#   image app  — someone else's published image, run as is. Leave REPO empty;
+#                the unit lives here as apps/<name>.container, and its Image=
+#                line pins the exact version (never :latest). Bump it there.
+#
 # Use the git@github.com: form for a PRIVATE repo — deploy-app.sh will generate
 # a per-app key and print it with the URL to register it. Use https:// for a
 # public one, which needs no credential at all and is one less thing to restore
@@ -18,12 +26,17 @@ REPO="https://github.com/mathslug/CHANGEME.git"
 BRANCH="main"
 
 # ── Container ───────────────────────────────────────────────────────────────
-# Quadlet unit, relative to the repo root. Installed to
+# Quadlet unit, relative to the app's repo root — or to this repo's root for an
+# image app ("apps/CHANGEME.container"). Installed to
 # ~/.config/containers/systemd/ and turned into a service by systemd's
 # podman-user-generator.
+#
+# The data must belong to podsvc on the host: backups read it and restore.sh
+# writes it as podsvc. Container root already maps there. If the image runs as
+# a non-root user, add UserNS=keep-id:uid=<its uid>,gid=<its gid> to the unit.
 QUADLET="deploy/CHANGEME.container"
 
-IMAGE="CHANGEME"
+IMAGE="CHANGEME"          # repo apps: the local build tag. Image apps: unused
 SERVICE="CHANGEME"        # must match ContainerName= in the Quadlet unit
 
 # Subdirectory of ~podsvc/data, bind-mounted into the container. Never touched
@@ -33,33 +46,33 @@ DATA_SUBDIR="CHANGEME"
 # ── Public ──────────────────────────────────────────────────────────────────
 # HOSTNAME and LOCAL_PORT generate the tunnel ingress rule. HEALTH_PATH must be
 # CHEAP — the dashboard polls it every 5 minutes and the container health check
-# every 30 seconds. Do not point it at a page that runs real queries.
+# every 30 seconds. Do not point it at a page that runs real queries. For an
+# image app, use whatever cheap endpoint it already has.
+#
+# The dashboard polls the PUBLIC hostname. Behind Cloudflare Access, give this
+# path its own Bypass application or every check books the login redirect as
+# a failure. The container's own HealthCmd is optional; it needs a shell or
+# runtime in the image to run it.
 HOSTNAME="CHANGEME.mathslug.com"
 LOCAL_PORT=8000
 HEALTH_PATH="/healthz"
 
 # ── Backup ──────────────────────────────────────────────────────────────────
-# BACKUP_DB is the database file inside DATA_SUBDIR, and BACKUP_SNAPSHOT_CMD
-# writes a consistent copy of it to /data/.backup.db from INSIDE the container.
-# That command runs in the app's own runtime, so it is `node …` for a Node app
-# and `python …` for a Python one, and the script lives in the app's repo.
+# BACKUP_DB is the SQLite file inside DATA_SUBDIR. pull-backups.sh snapshots it
+# with VACUUM INTO, using the Pi's own python3, so the app needs nothing for it.
 #
 # LEAVE BACKUP_DB EMPTY IF THE APP HAS NO DATABASE. AvaLong keeps its whole
 # state in memory; an empty value says so, and the backup skips the snapshot
 # instead of failing every night.
-#
-# Put the snapshot script at the REPO ROOT unless you are sure .containerignore
-# does not exclude deploy/ — whorl's does, and the file was silently missing
-# from the image. deploy-app.sh now checks this at deploy time.
 BACKUP_DB=""
-BACKUP_SNAPSHOT_CMD=""
 # Directories under DATA_SUBDIR to copy verbatim, space separated. Uploads and
 # anything else not in the database.
 BACKUP_DIRS=""
 
 # ── Scheduled work (optional) ───────────────────────────────────────────────
 # Only if the app ships timers. UNITS_DIR is a directory of plain systemd user
-# units in the app's repo; deploy-app.sh installs them and enables any .timer.
+# units, relative to the same root as QUADLET; deploy-app.sh installs them and
+# enables any .timer.
 #
 # JOB_RECEIPTS is what the dashboard watches: "job:maxage", where each job
 # writes /var/lib/rpi-health/jobs/<app>.<job> after a clean run. Without this,

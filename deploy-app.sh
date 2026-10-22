@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
-# deploy-app.sh — clone or update an app, build its image, and start it under
-# rootless podman + systemd.
+# deploy-app.sh — get an app's image and start it under rootless podman +
+# systemd. A repo app is cloned or updated and built here; an image app (no
+# REPO in its conf) pulls the published image its unit names.
 #
 #     /opt/rpi/deploy-app.sh <app>
 #
@@ -38,64 +39,67 @@ asuser() {
     "$@"
 }
 
-# ---------------------------------------------------------------------------
-say "Deploy key"
-# ---------------------------------------------------------------------------
-# One key per app: GitHub will not register the same public key as a deploy key
-# on two repositories. Only for SSH remotes — an https:// URL in the conf means
-# the repo is public and needs no credential.
-case "$REPO" in
-  git@*|ssh://*)
-    if sudo test -f "$DEPLOY_KEY"; then
-      ok "$(basename "$DEPLOY_KEY")"
-    else
-      asuser mkdir -p "${SVC_HOME}/.ssh"
-      asuser chmod 700 "${SVC_HOME}/.ssh"
-      asuser ssh-keygen -t ed25519 -N "" -f "$DEPLOY_KEY" -C "${APP}@$(hostname)" >/dev/null
-      ok "generated $(basename "$DEPLOY_KEY")"
-    fi
-    ;;
-  *)
-    ok "public repo over https — no deploy key needed"
-    ;;
-esac
-
-# Before anything expensive, so a missing key fails in two seconds with the fix
-# printed rather than part-way through a build.
-if ! asuser git ls-remote --exit-code "$REPO" HEAD >/dev/null 2>&1; then
-  OWNER_REPO=$(printf '%s' "$REPO" | sed 's#.*[:/]\([^/]*/[^/]*\)\.git#\1#')
-  echo
-  echo "   Cannot read ${REPO}."
+# Image apps have no repo: nothing to clone, so no key and no checkout.
+if [ -n "${REPO:-}" ]; then
+  # ---------------------------------------------------------------------------
+  say "Deploy key"
+  # ---------------------------------------------------------------------------
+  # One key per app: GitHub will not register the same public key as a deploy
+  # key on two repositories. Only for SSH remotes — an https:// URL in the conf
+  # means the repo is public and needs no credential.
   case "$REPO" in
     git@*|ssh://*)
-      echo "   Add this as a read-only deploy key:"
-      echo "     https://github.com/${OWNER_REPO}/settings/keys/new"
-      echo
-      sudo cat "${DEPLOY_KEY}.pub" | sed 's/^/     /'
+      if sudo test -f "$DEPLOY_KEY"; then
+        ok "$(basename "$DEPLOY_KEY")"
+      else
+        asuser mkdir -p "${SVC_HOME}/.ssh"
+        asuser chmod 700 "${SVC_HOME}/.ssh"
+        asuser ssh-keygen -t ed25519 -N "" -f "$DEPLOY_KEY" -C "${APP}@$(hostname)" >/dev/null
+        ok "generated $(basename "$DEPLOY_KEY")"
+      fi
       ;;
     *)
-      echo "   The repo is configured as public. If it is private, change REPO"
-      echo "   in apps/${APP}.conf to the git@github.com: form and re-run."
+      ok "public repo over https — no deploy key needed"
       ;;
   esac
-  echo
-  exit 1
-fi
 
-# ---------------------------------------------------------------------------
-say "Source: ${REPO}"
-# ---------------------------------------------------------------------------
-if sudo test -d "${CHECKOUT}/.git"; then
-  # The conf is the source of truth for where the code comes from. An existing
-  # checkout keeps whatever remote it was cloned with, so switching a repo
-  # between ssh and https would otherwise take effect only on a rebuild.
-  asuser git -C "$CHECKOUT" remote set-url origin "$REPO"
-  asuser git -C "$CHECKOUT" fetch --quiet origin "$BRANCH"
-  asuser git -C "$CHECKOUT" reset --quiet --hard "origin/${BRANCH}"
-  ok "updated to $(asuser git -C "$CHECKOUT" rev-parse --short HEAD)"
-else
-  asuser git clone --quiet --branch "$BRANCH" "$REPO" "$CHECKOUT"
-  ok "cloned at $(asuser git -C "$CHECKOUT" rev-parse --short HEAD)"
+  # Before anything expensive, so a missing key fails in two seconds with the
+  # fix printed rather than part-way through a build.
+  if ! asuser git ls-remote --exit-code "$REPO" HEAD >/dev/null 2>&1; then
+    OWNER_REPO=$(printf '%s' "$REPO" | sed 's#.*[:/]\([^/]*/[^/]*\)\.git#\1#')
+    echo
+    echo "   Cannot read ${REPO}."
+    case "$REPO" in
+      git@*|ssh://*)
+        echo "   Add this as a read-only deploy key:"
+        echo "     https://github.com/${OWNER_REPO}/settings/keys/new"
+        echo
+        sudo cat "${DEPLOY_KEY}.pub" | sed 's/^/     /'
+        ;;
+      *)
+        echo "   The repo is configured as public. If it is private, change REPO"
+        echo "   in apps/${APP}.conf to the git@github.com: form and re-run."
+        ;;
+    esac
+    echo
+    exit 1
+  fi
+
+  # ---------------------------------------------------------------------------
+  say "Source: ${REPO}"
+  # ---------------------------------------------------------------------------
+  if sudo test -d "${CHECKOUT}/.git"; then
+    # The conf is the source of truth for where the code comes from. An existing
+    # checkout keeps whatever remote it was cloned with, so switching a repo
+    # between ssh and https would otherwise take effect only on a rebuild.
+    asuser git -C "$CHECKOUT" remote set-url origin "$REPO"
+    asuser git -C "$CHECKOUT" fetch --quiet origin "$BRANCH"
+    asuser git -C "$CHECKOUT" reset --quiet --hard "origin/${BRANCH}"
+    ok "updated to $(asuser git -C "$CHECKOUT" rev-parse --short HEAD)"
+  else
+    asuser git clone --quiet --branch "$BRANCH" "$REPO" "$CHECKOUT"
+    ok "cloned at $(asuser git -C "$CHECKOUT" rev-parse --short HEAD)"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -112,51 +116,51 @@ else
   ok "env: ${ENV_FILE} CREATED FROM TEMPLATE — edit it, real secrets are not in git"
 fi
 
-# ---------------------------------------------------------------------------
-say "Build ${IMAGE}:latest"
-# ---------------------------------------------------------------------------
-# Built natively: per-architecture dependencies resolve for the host that runs
-# them.
-asuser podman build --quiet -t "${IMAGE}:latest" "$CHECKOUT" >/dev/null
-ok "built $(asuser podman image inspect "${IMAGE}:latest" --format '{{.Id}}' | cut -c1-12)"
-
-# The conf names a snapshot script and the image must contain it; nothing else
-# connects the two, and .containerignore can silently exclude it. Checking here
-# moves the failure to the deploy that caused it, not that night's backup.
-if [ -n "${BACKUP_SNAPSHOT_CMD:-}" ]; then
-  SNAP_SCRIPT=$(printf '%s' "$BACKUP_SNAPSHOT_CMD" | awk '{print $NF}')
-  asuser podman run --rm --entrypoint "" "${IMAGE}:latest" \
-    test -f "$SNAP_SCRIPT" \
-    || { echo "   ${SNAP_SCRIPT} is not in the image, so backups cannot snapshot"
-         echo "   ${APP}'s database. Check .containerignore and the conf's"
-         echo "   BACKUP_SNAPSHOT_CMD; they have to agree."
-         exit 1; }
-  ok "backup snapshot script present: ${SNAP_SCRIPT}"
+if [ -n "${REPO:-}" ]; then
+  # -------------------------------------------------------------------------
+  say "Build ${IMAGE}:latest"
+  # -------------------------------------------------------------------------
+  # Built natively: per-architecture dependencies resolve for the host that
+  # runs them.
+  asuser podman build --quiet -t "${IMAGE}:latest" "$CHECKOUT" >/dev/null
+  ok "built $(asuser podman image inspect "${IMAGE}:latest" --format '{{.Id}}' | cut -c1-12)"
+else
+  # The unit's Image= line is the only place the version is written, so a
+  # version bump is one edit there, and that edit is what auto-deploy.sh sees.
+  IMAGE=$(sed -n 's/^Image=//p' "${SOURCE_ROOT}/${QUADLET}")
+  [ -n "$IMAGE" ] || { echo "   no Image= line in ${QUADLET}"; exit 1; }
+  # -------------------------------------------------------------------------
+  say "Pull ${IMAGE}"
+  # -------------------------------------------------------------------------
+  # Here rather than when the unit starts, so a bad tag or a registry outage
+  # fails before the running version is stopped.
+  PULLED=$(asuser podman pull --quiet "$IMAGE")
+  ok "pulled ${PULLED:0:12}"
 fi
 
 # ---------------------------------------------------------------------------
 say "Install unit and start"
 # ---------------------------------------------------------------------------
-asuser install -m 0644 "${CHECKOUT}/${QUADLET}" \
+asuser install -m 0644 "${SOURCE_ROOT}/${QUADLET}" \
   "${SVC_HOME}/.config/containers/systemd/$(basename "$QUADLET")"
 
 # Optional user units shipped by the app, so a schedule change ships with the
 # code change that motivated it.
-if [ -n "${UNITS_DIR:-}" ] && sudo test -d "${CHECKOUT}/${UNITS_DIR}"; then
+if [ -n "${UNITS_DIR:-}" ] && sudo test -d "${SOURCE_ROOT}/${UNITS_DIR}"; then
   asuser mkdir -p "${SVC_HOME}/.config/systemd/user"
-  for unit in $(sudo sh -c "ls -1 ${CHECKOUT}/${UNITS_DIR}"); do
-    asuser install -m 0644 "${CHECKOUT}/${UNITS_DIR}/${unit}" \
+  for unit in $(sudo sh -c "ls -1 ${SOURCE_ROOT}/${UNITS_DIR}"); do
+    asuser install -m 0644 "${SOURCE_ROOT}/${UNITS_DIR}/${unit}" \
       "${SVC_HOME}/.config/systemd/user/${unit}"
   done
-  ok "units: $(sudo sh -c "ls -1 ${CHECKOUT}/${UNITS_DIR}" | tr '\n' ' ')"
+  ok "units: $(sudo sh -c "ls -1 ${SOURCE_ROOT}/${UNITS_DIR}" | tr '\n' ' ')"
 fi
 
 asuser systemctl --user daemon-reload
 
 # After the reload, so systemd sees the units just installed. A timer removed
 # from the repo is NOT disabled here — that stays a manual step.
-if [ -n "${UNITS_DIR:-}" ] && sudo test -d "${CHECKOUT}/${UNITS_DIR}"; then
-  for timer in $(sudo sh -c "ls -1 ${CHECKOUT}/${UNITS_DIR}" | grep '\.timer$' || true); do
+if [ -n "${UNITS_DIR:-}" ] && sudo test -d "${SOURCE_ROOT}/${UNITS_DIR}"; then
+  for timer in $(sudo sh -c "ls -1 ${SOURCE_ROOT}/${UNITS_DIR}" | grep '\.timer$' || true); do
     asuser systemctl --user enable --now "$timer" >/dev/null 2>&1
     ok "timer: ${timer} — next $(asuser systemctl --user show "$timer" -p NextElapseUSecRealtime --value)"
   done

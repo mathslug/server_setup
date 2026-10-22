@@ -4,7 +4,8 @@ Run containerised web apps on a Raspberry Pi: reachable from the internet with
 no open ports, backed up off the box, rebuildable from a wiped disk in half an
 hour. Free tier Cloudflare; no cost beyond the hardware.
 
-Per-app `Containerfile` and Quadlet unit live in that app's own repo.
+Runs two kinds of app: your own, built from its repo on the Pi, and anyone's
+published image, run as is. Each is one conf file plus one Quadlet unit.
 
 - **No inbound ports** — a Cloudflare Tunnel dials out; dynamic IP is irrelevant
 - **Rootless containers** under a sudo-less account, so an escape lands nowhere
@@ -36,8 +37,8 @@ and a replacement can be prepared while the machine runs on the old one.
 remote/           the halves that execute on the Pi, piped over ssh
 apps/<name>.conf  per-app config — repo, ports, backup, health. One file
                   registers an app everywhere
-deploy-app.sh     clone/build/start one app
-auto-deploy.sh    redeploy if the branch moved; driven by a timer
+deploy-app.sh     clone and build, or pull, then start one app
+auto-deploy.sh    redeploy if the branch or unit changed; driven by a timer
 backup/           pull-backups.sh off the Pi, restore.sh back again
 monitor/          health collector, LAN dashboard, rescue-disk check
 cloudflared/      tunnel ingress, install.sh, hardened unit
@@ -50,9 +51,10 @@ is the only thing that matters, `~podsvc/.config/<name>.env` holds secrets.
 
 ## Adding an app
 
-Copy `apps/EXAMPLE.conf.template`. In the app's own repo you need a
-`Containerfile`, a cheap health endpoint, `deploy/<name>.container`, and — if it
-has a database — `snapshot.<ext>` at the repo root.
+Copy `apps/EXAMPLE.conf.template`. For your own app, its repo needs a
+`Containerfile`, a cheap health endpoint and `deploy/<name>.container`. For a
+published image, leave `REPO` empty and write `apps/<name>.container` here,
+pinned to an exact version. Either way, a database is just `BACKUP_DB`.
 
 Then: Access policy, `deploy-app.sh <name>`, real secrets into the env file,
 DNS last.
@@ -64,10 +66,9 @@ the hostname immediately and will book failures against a name that does not
 point here yet.
 
 **Size the memory cap to the app's largest file, not its process.** The cap
-covers page cache, and backups run `VACUUM INTO` inside the container, so the
-whole database passes through it. Check with `memory.events` — `max` should be
-0. `podman stats` will not show this; page cache the app keeps losing never
-appears there.
+covers page cache, so a database the app reads passes through it. Check with
+`memory.events` — `max` should be 0. `podman stats` will not show this; page
+cache the app keeps losing never appears there.
 
 ## Remote access
 

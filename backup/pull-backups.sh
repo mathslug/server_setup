@@ -10,7 +10,8 @@
 #   * Pull, not push — the workstation sleeps and moves.
 #   * VACUUM INTO, never cp: WAL means copying the database file alone yields a
 #     valid but silently empty one.
-#   * The snapshot script lives in each app's repo; it runs in that runtime.
+#   * Snapshot with the Pi's own python3, not inside the container, so it
+#     works whatever the image ships.
 #   * Dated snapshots, never a mirror — a mirror replicates corruption over the
 #     last good copy.
 #   * Verify the copy that was kept, not the original.
@@ -84,12 +85,6 @@ else
 fi
 log "reaching the Pi as '${PI}'"
 
-# useradd hands out the next free uid, so podsvc is 1001 by creation order, not
-# by design. Ask for it: the wrong runtime directory means podman cannot find
-# its socket, and a rebuild is exactly when the number would change.
-SVC_UID=$(ssh -o BatchMode=yes "$PI" "id -u ${SERVICE_USER}" 2>/dev/null) \
-  || fail "cannot read ${SERVICE_USER}'s uid on ${PI}"
-
 backup_app() {
   local APP="$1"
   appconf_load "$APP"
@@ -99,11 +94,27 @@ backup_app() {
   # not database-specific still runs.
   if [ -n "${BACKUP_DB:-}" ]; then
 
-  # 1. Snapshot inside the app's container. Keep it in a script: a nested-quoted
-  #    one-liner through ssh breaks silently.
-  ssh -o BatchMode=yes "$PI" "cd /tmp && sudo -u ${SERVICE_USER} env HOME=${SVC_HOME} \
-      XDG_RUNTIME_DIR=/run/user/${SVC_UID} podman exec ${APP} ${BACKUP_SNAPSHOT_CMD}" \
-    >/dev/null || { app_fail "${APP}: snapshot failed"; return 1; }
+  # 1. Snapshot from the host, as the account that owns the data, with the Pi's
+  #    own python3 — the collector already needs it, so this installs nothing
+  #    and works whatever the image ships. SQLite locks the file the same way
+  #    from either side of the container boundary, so this is as safe as a
+  #    second connection inside it. The script goes in on stdin: a
+  #    nested-quoted one-liner through ssh breaks silently.
+  ssh -o BatchMode=yes "$PI" "sudo -u ${SERVICE_USER} python3 -I - ${DATA_DIR}/${BACKUP_DB}" \
+    >/dev/null <<'PY' || { app_fail "${APP}: snapshot failed"; return 1; }
+import os, sqlite3, sys
+src = sys.argv[1]
+dst = os.path.join(os.path.dirname(src), ".backup.db")
+# VACUUM INTO refuses an existing file; one here is from a run that died.
+if os.path.exists(dst):
+    os.remove(dst)
+# mode=rw: fail on a missing database rather than create an empty one. Not
+# read-only, which on a WAL database needs the -shm to exist already. The
+# timeout rides out a job holding the write lock.
+con = sqlite3.connect(f"file:{src}?mode=rw", uri=True, timeout=120)
+con.execute("VACUUM INTO ?", (dst,))
+con.close()
+PY
 
   # 2. Retrieve compressed, then delete from the Pi. gzip streams, so the SD
   #    card takes no extra writes.
