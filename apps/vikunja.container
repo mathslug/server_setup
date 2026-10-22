@@ -26,7 +26,7 @@ Volume=%h/data/vikunja:/data
 EnvironmentFile=%h/.config/vikunja.env
 
 # Settings live here, in git. The env file holds only the secret.
-Environment=VIKUNJA_SERVICE_PUBLICURL=https://tasks.mathslug.com/
+Environment=VIKUNJA_SERVICE_PUBLICURL=https://thesystem.mathslug.com/
 Environment=VIKUNJA_SERVICE_TIMEZONE=America/Chicago
 Environment=VIKUNJA_SERVICE_ENABLEREGISTRATION=false
 Environment=VIKUNJA_DATABASE_PATH=/data/vikunja.db
