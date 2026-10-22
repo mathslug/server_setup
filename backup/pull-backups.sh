@@ -56,8 +56,17 @@ log "=== backup run ${STAMP} ==="
 
 # LAN first, tunnel second. `timeout`, not just ConnectTimeout: with an expired
 # Access token `cloudflared access ssh` blocks on a browser login nobody answers.
+#
+# Each failure logs ssh's own last line. A run once failed on the tunnel in
+# under a second without reaching the Pi, and with the error discarded there
+# was nothing to say why.
 try_host() {
-  timeout 30 ssh -o ConnectTimeout=10 -o BatchMode=yes "$1" true 2>/dev/null
+  local err rc
+  err=$(timeout 30 ssh -o ConnectTimeout=10 -o BatchMode=yes "$1" true 2>&1) && return 0
+  rc=$?
+  [ "$rc" = 124 ] && err="no answer in 30s"
+  log "  ${1}: $(printf '%s' "$err" | tail -1)"
+  return 1
 }
 
 if [ -n "$PI" ]; then
