@@ -18,7 +18,9 @@ PublishPort=127.0.0.1:8003:3456
 # The image runs as uid 1000. keep-id maps that uid to podsvc, so the data is
 # podsvc's on the host, where the backup reads it and restore.sh writes it.
 # The image sets no group, so without Group= files get gid 0, a subgid here.
+# Quadlet refuses Group= without User=.
 UserNS=keep-id:uid=1000,gid=1000
+User=1000
 Group=1000
 Volume=%h/data/vikunja:/data
 EnvironmentFile=%h/.config/vikunja.env

@@ -141,6 +141,21 @@ fi
 # ---------------------------------------------------------------------------
 say "Install unit and start"
 # ---------------------------------------------------------------------------
+# Quadlet silently drops a unit it cannot convert on the next daemon-reload,
+# and the service goes with it, leaving the old container running unsupervised.
+# Convert it alone first, so a bad unit fails here with the old one installed.
+CHECK_DIR=$(asuser mktemp -d)
+asuser cp "${SOURCE_ROOT}/${QUADLET}" "${CHECK_DIR}/"
+if ! QUADLET_ERR=$(asuser env QUADLET_UNIT_DIRS="$CHECK_DIR" \
+    /usr/libexec/podman/quadlet -dryrun -user 2>&1 >/dev/null); then
+  asuser rm -rf "$CHECK_DIR"
+  echo "   Quadlet rejects ${QUADLET}; the running version is untouched:"
+  printf '%s\n' "$QUADLET_ERR" | tail -3 | sed 's/^/     /'
+  exit 1
+fi
+asuser rm -rf "$CHECK_DIR"
+ok "unit converts: $(basename "$QUADLET")"
+
 asuser install -m 0644 "${SOURCE_ROOT}/${QUADLET}" \
   "${SVC_HOME}/.config/containers/systemd/$(basename "$QUADLET")"
 
