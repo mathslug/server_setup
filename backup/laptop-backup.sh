@@ -85,9 +85,16 @@ SFTP=(-o "sftp.command=ssh ${PI} -o BatchMode=yes -s sftp")
 restic "${SFTP[@]}" unlock -q || fail "cannot open the repository at ${RESTIC_REPOSITORY}"
 
 # --one-file-system: the home folder and nothing mounted inside it.
+RC=0
 restic "${SFTP[@]}" backup "$HOME" --one-file-system \
-  --exclude-caches --exclude-file="${HERE}/laptop-excludes" \
-  || fail "restic backup exited $? — see journalctl --user -u laptop-backup"
+  --exclude-caches --exclude-file="${HERE}/laptop-excludes" || RC=$?
+# 3: the snapshot was saved but some files changed or vanished mid-read. A live
+# home folder always has a few, so it is logged, not alarmed on.
+case "$RC" in
+  0) ;;
+  3) log "WARNING: some files could not be read and were skipped (listed above)" ;;
+  *) fail "restic backup exited ${RC} — see journalctl --user -u laptop-backup" ;;
+esac
 
 restic "${SFTP[@]}" forget --prune --keep-weekly "$KEEP_WEEKLY" --keep-monthly "$KEEP_MONTHLY" \
   || fail "restic forget/prune failed"
