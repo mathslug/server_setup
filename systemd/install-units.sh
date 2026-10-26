@@ -13,9 +13,11 @@
 # changed unit is pulled and then silently ignored.
 #
 # Run from rpi-selfupdate.service itself, which is safe despite appearances:
-# this only writes files and reloads. systemd keeps executing the already-loaded
-# version of a running unit, so rewriting its own unit finishes under the old
-# definition and the new one takes effect next run.
+# this only writes files and reloads, and a reload does not interrupt the run.
+# It does change what runs next. systemd finds the current command in the new
+# definition and carries on from there, so ExecStart lines added after this one
+# run in the same pass. If this line itself is changed or removed, systemd
+# cannot find its place and skips the rest of that pass.
 
 set -euo pipefail
 
