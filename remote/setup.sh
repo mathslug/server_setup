@@ -192,7 +192,7 @@ fi
 say "Packages"
 # ---------------------------------------------------------------------------
 sudo DEBIAN_FRONTEND=noninteractive apt-get -y install \
-  podman uidmap passt netavark aardvark-dns git >/dev/null
+  podman uidmap passt netavark aardvark-dns git rsync smartmontools >/dev/null
 ok "podman $(podman --version | awk '{print $3}')"
 
 # ---------------------------------------------------------------------------
@@ -245,6 +245,28 @@ d /run/rpi-health/www 0755 root root -
 EOF
 sudo systemd-tmpfiles --create /etc/tmpfiles.d/rpi-health.conf
 ok "runtime: /run/rpi-health/www (recreated each boot)"
+
+# ---------------------------------------------------------------------------
+say "Backup disk"
+# ---------------------------------------------------------------------------
+# By label, because with two USB disks sda and sdb trade names between boots.
+# nofail, because a dead backup disk must not stop the machine booting.
+# Formatting one is provision-backup-disk.sh's job; this mounts what is there.
+FSTAB_LINE="LABEL=pi-backup /srv/backup ext4 defaults,noatime,nofail,x-systemd.device-timeout=30s 0 2"
+sudo install -d -m 0755 /srv/backup
+if ! grep -qxF "$FSTAB_LINE" /etc/fstab; then
+  sudo sed -i '/^LABEL=pi-backup /d' /etc/fstab
+  echo "$FSTAB_LINE" | sudo tee -a /etc/fstab >/dev/null
+  sudo systemctl daemon-reload
+fi
+if ! mountpoint -q /srv/backup && sudo blkid -L pi-backup >/dev/null; then
+  sudo mount /srv/backup
+fi
+if mountpoint -q /srv/backup; then
+  ok "mounted at /srv/backup, $(df -h --output=avail /srv/backup | tail -1 | tr -d ' ') free"
+else
+  ok "WARNING: no disk labelled pi-backup attached — nothing will be backed up"
+fi
 
 # ---------------------------------------------------------------------------
 say "This repo, at /opt/rpi"

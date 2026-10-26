@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 #
-# pull-backups.sh — pull application state off the Pi onto this laptop.
+# snapshot.sh — snapshot application state onto the backup disk.
 #
-# Run daily by pi-backup.timer (install: see pi-backup.service), or by hand:
-#     ~/src/server_setup/backup/pull-backups.sh
+# Run on the Pi, daily by rpi-backup.timer, or by hand:
+#     sudo /opt/rpi/backup/snapshot.sh
+#
+# Writes /srv/backup/pi/{daily,weekly}/<stamp> as plain files: each database
+# gzipped, BACKUP_DIRS copied, env files, the tunnel credentials. `latest`
+# points at the newest complete run.
 #
 # Constraints to preserve:
 #
-#   * Pull, not push — the workstation sleeps and moves.
 #   * VACUUM INTO, never cp: WAL means copying the database file alone yields a
 #     valid but silently empty one.
 #   * Snapshot with the Pi's own python3, not inside the container, so it
@@ -15,74 +18,43 @@
 #   * Dated snapshots, never a mirror — a mirror replicates corruption over the
 #     last good copy.
 #   * Verify the copy that was kept, not the original.
+#   * Never write unless the disk is mounted. The mountpoint is a directory on
+#     the root disk, and a run into it fills that instead.
 
 set -euo pipefail
 
-# Set PI_HOST to force a host; otherwise chosen by the reachability check below.
-PI="${PI_HOST:-}"
-# Git-ignored.
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEST="${BACKUP_DEST:-${REPO_ROOT}/backups}"
+MNT=/srv/backup
+DEST="${MNT}/pi"
 # Days and weeks, not runs — see collapse_same_day().
-KEEP_DAILY=14
-KEEP_WEEKLY=8
+KEEP_DAILY=30
+KEEP_WEEKLY=52
+RECEIPT=/var/lib/rpi-health/last-backup
 
 STAMP=$(date +%Y-%m-%d_%H%M%S)
 RUN="${DEST}/daily/${STAMP}"
 LATEST="${DEST}/latest"
+REPO_ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 
 # shellcheck disable=SC1091
 . "${REPO_ROOT}/lib/appconf.sh"
 
 log() { printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 
-# Best effort: a notification daemon must never be able to fail the backup that
-# is reporting through it.
-notify() {
-  [ -n "${BACKUP_NO_NOTIFY:-}" ] && return 0
-  command -v notify-send >/dev/null 2>&1 || return 0
-  notify-send --urgency=critical --app-name="Pi backup" "Pi backup failed" "$1" \
-    >/dev/null 2>&1 || true
-}
-
 # fail() aborts the run; app_fail() gives up on one app. Both exit non-zero.
-fail() { log "FAILED: $*"; notify "$*"; exit 1; }
+fail() { log "FAILED: $*"; exit 1; }
 app_fail() { log "FAILED: $*"; return 1; }
 FAILED_APPS=""
 
-mkdir -p "${DEST}/daily" "${DEST}/weekly"
+[ "$(id -u)" = 0 ] || fail "run with sudo"
+mountpoint -q "$MNT" || fail "${MNT} is not mounted — is the backup disk attached?"
+exec 9>/run/rpi-backup.lock
+flock -n 9 || fail "another snapshot is already running"
 
-log "=== backup run ${STAMP} ==="
+# .tmp on the disk, not /tmp: that is tmpfs here, and a database decompressed
+# for verification would sit in RAM next to the apps.
+install -d -m 0700 "$DEST" "${DEST}/daily" "${DEST}/weekly" "${DEST}/.tmp"
 
-# LAN first, tunnel second. `timeout`, not just ConnectTimeout: with an expired
-# Access token `cloudflared access ssh` blocks on a browser login nobody answers.
-#
-# Each failure logs ssh's own last line. A run once failed on the tunnel in
-# under a second without reaching the Pi, and with the error discarded there
-# was nothing to say why.
-try_host() {
-  local err rc
-  err=$(timeout 30 ssh -o ConnectTimeout=10 -o BatchMode=yes "$1" true 2>&1) && return 0
-  rc=$?
-  [ "$rc" = 124 ] && err="no answer in 30s"
-  log "  ${1}: $(printf '%s' "$err" | tail -1)"
-  return 1
-}
-
-if [ -n "$PI" ]; then
-  try_host "$PI" || fail "cannot reach ${PI} over ssh"
-else
-  # Three rounds: one dropped tunnel handshake should not cost a day's backup.
-  for ROUND in 1 2 3; do
-    for CANDIDATE in mypi mypi-remote; do
-      if try_host "$CANDIDATE"; then PI="$CANDIDATE"; break 2; fi
-    done
-    [ "$ROUND" = 3 ] || sleep 20
-  done
-  # Off the LAN, the usual cause is the 30-day Access login lapsing.
-  [ -n "$PI" ] || fail "cannot reach the Pi on the LAN (mypi) or the tunnel (mypi-remote) — if the Access login expired, \`ssh mypi-remote true\` renews it"
-fi
-log "reaching the Pi as '${PI}'"
+log "=== snapshot ${STAMP} ==="
 
 backup_app() {
   local APP="$1"
@@ -93,13 +65,10 @@ backup_app() {
   # not database-specific still runs.
   if [ -n "${BACKUP_DB:-}" ]; then
 
-  # 1. Snapshot from the host, as the account that owns the data, with the Pi's
-  #    own python3 — the collector already needs it, so this installs nothing
-  #    and works whatever the image ships. SQLite locks the file the same way
-  #    from either side of the container boundary, so this is as safe as a
-  #    second connection inside it. The script goes in on stdin: a
-  #    nested-quoted one-liner through ssh breaks silently.
-  ssh -o BatchMode=yes "$PI" "sudo -u ${SERVICE_USER} python3 -I - ${DATA_DIR}/${BACKUP_DB}" \
+  # 1. Snapshot as the account that owns the data. SQLite locks the file the
+  #    same way from either side of the container boundary, so this is as safe
+  #    as a second connection inside it.
+  runuser -u "$SERVICE_USER" -- python3 -I - "${DATA_DIR}/${BACKUP_DB}" \
     >/dev/null <<'PY' || { app_fail "${APP}: snapshot failed"; return 1; }
 import os, sqlite3, sys
 src = sys.argv[1]
@@ -115,11 +84,10 @@ con.execute("VACUUM INTO ?", (dst,))
 con.close()
 PY
 
-  # 2. Retrieve compressed, then delete from the Pi. gzip streams, so the SD
-  #    card takes no extra writes.
-  ssh -o BatchMode=yes "$PI" "sudo gzip -c ${DATA_DIR}/.backup.db" \
-    > "${RUN}/${APP}/${BACKUP_DB}.gz" || { app_fail "${APP}: could not retrieve snapshot"; return 1; }
-  ssh -o BatchMode=yes "$PI" "sudo rm -f ${DATA_DIR}/.backup.db"
+  # 2. Compress onto the disk, then delete the snapshot.
+  gzip -c "${DATA_DIR}/.backup.db" > "${RUN}/${APP}/${BACKUP_DB}.gz" \
+    || { rm -f "${DATA_DIR}/.backup.db"; app_fail "${APP}: could not compress snapshot"; return 1; }
+  rm -f "${DATA_DIR}/.backup.db"
   [ -s "${RUN}/${APP}/${BACKUP_DB}.gz" ] || { app_fail "${APP}: snapshot came back empty"; return 1; }
   fi
 
@@ -129,18 +97,14 @@ PY
   for DIR in ${BACKUP_DIRS:-}; do
     LINK_ARG=""
     [ -d "${LATEST}/${APP}/${DIR}" ] && LINK_ARG="--link-dest=${LATEST}/${APP}/${DIR}"
-    rsync -a --rsync-path="sudo rsync" $LINK_ARG \
-      "${PI}:${DATA_DIR}/${DIR}/" "${RUN}/${APP}/${DIR}/" \
+    rsync -a $LINK_ARG "${DATA_DIR}/${DIR}/" "${RUN}/${APP}/${DIR}/" \
       || { app_fail "${APP}: ${DIR} rsync failed"; return 1; }
-    FILES=$(( FILES + $(find "${RUN}/${APP}/${DIR}" -type f 2>/dev/null | wc -l | tr -d ' ') ))
+    FILES=$(( FILES + $(find "${RUN}/${APP}/${DIR}" -type f 2>/dev/null | wc -l) ))
   done
 
-  # sudo cat, not scp: the env file is 0600 and owned by the service account, so
-  # scp as the login user silently reads nothing.
-  ssh -o BatchMode=yes "$PI" "sudo cat ${ENV_FILE}" > "${RUN}/${APP}/env" \
+  install -m 0600 "$ENV_FILE" "${RUN}/${APP}/env" \
     || { app_fail "${APP}: could not read ${ENV_FILE}"; return 1; }
-  chmod 600 "${RUN}/${APP}/env"
-  [ -s "${RUN}/${APP}/env" ] || { app_fail "${APP}: env file came back empty"; return 1; }
+  [ -s "${RUN}/${APP}/env" ] || { app_fail "${APP}: env file is empty"; return 1; }
 
   # 4. Verify what was kept, not the original. python3, so one verifier covers
   #    every app.
@@ -150,10 +114,10 @@ PY
     return 0
   fi
 
-  TMPDB=$(mktemp "${TMPDIR:-/tmp}/pi-backup-verify.XXXXXX")
+  TMPDB=$(mktemp "${DEST}/.tmp/verify.XXXXXX")
   gunzip -c "${RUN}/${APP}/${BACKUP_DB}.gz" > "$TMPDB" \
     || { rm -f "$TMPDB"; app_fail "${APP}: snapshot will not decompress"; return 1; }
-  RESULT=$(python3 - "$TMPDB" <<'PY'
+  RESULT=$(python3 -I - "$TMPDB" <<'PY'
 import sqlite3, sys
 db = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
 ok = db.execute("pragma integrity_check").fetchone()[0]
@@ -189,34 +153,29 @@ done
 # Without this a rebuilt Pi cannot serve. The tunnel credentials are
 # unrecoverable — Cloudflare issues the token once and will not reissue it.
 log "--- host ---"
-mkdir -p "${RUN}/host/cloudflared"
-chmod 700 "${RUN}/host"
-
-for f in /etc/cloudflared/config.yml /root/.cloudflared/cert.pem; do
-  ssh -o BatchMode=yes "$PI" "sudo cat $f" > "${RUN}/host/cloudflared/$(basename "$f")" \
-    || fail "host: could not read $f"
-done
+install -d -m 0700 "${RUN}/host" "${RUN}/host/cloudflared"
 # The tunnel credentials file is named for the tunnel UUID.
-CRED=$(ssh -o BatchMode=yes "$PI" "sudo sh -c 'ls -1 /etc/cloudflared/*.json'" | head -1)
-ssh -o BatchMode=yes "$PI" "sudo cat ${CRED}" > "${RUN}/host/cloudflared/$(basename "$CRED")" \
-  || fail "host: could not read tunnel credentials"
-
-chmod 600 "${RUN}"/host/cloudflared/*
+CRED=$(ls -1 /etc/cloudflared/*.json 2>/dev/null | head -1)
+[ -n "$CRED" ] || fail "host: no tunnel credentials in /etc/cloudflared"
+for f in /etc/cloudflared/config.yml /root/.cloudflared/cert.pem "$CRED"; do
+  install -m 0600 "$f" "${RUN}/host/cloudflared/" || fail "host: could not read $f"
+done
 log "host: cloudflared config + tunnel credentials"
 
-# Promote to `latest` so tomorrow's run can hardlink against this one.
-rm -f "$LATEST"; ln -s "$RUN" "$LATEST"
+# Promote to `latest` so tomorrow's run can hardlink against this one. Relative,
+# so it still resolves with the disk mounted somewhere else.
+ln -sfn "daily/${STAMP}" "$LATEST"
 
 # Weekly: keep Sunday's run as a longer-lived copy.
 if [ "$(date +%u)" = "7" ]; then
-  cp -al "$RUN" "${DEST}/weekly/${STAMP}" 2>/dev/null || cp -a "$RUN" "${DEST}/weekly/${STAMP}"
+  cp -al "$RUN" "${DEST}/weekly/${STAMP}"
   log "promoted to weekly"
 fi
 
 # Prune. `latest` is a symlink into daily/, so prune before it can dangle.
 prune() {
   local dir="$1" keep="$2"
-  local n; n=$(ls -1 "$dir" 2>/dev/null | wc -l | tr -d ' ')
+  local n; n=$(ls -1 "$dir" 2>/dev/null | wc -l)
   if [ "$n" -gt "$keep" ]; then
     ls -1 "$dir" | sort | head -n $(( n - keep )) | while read -r old; do
       [ -n "$old" ] && rm -rf "${dir:?}/${old}" && log "pruned $(basename "$dir")/${old}"
@@ -243,23 +202,20 @@ collapse_same_day "${DEST}/daily"
 
 prune "${DEST}/daily" "$KEEP_DAILY"
 prune "${DEST}/weekly" "$KEEP_WEEKLY"
-[ -e "$LATEST" ] || ln -s "$RUN" "$LATEST"
+[ -e "$LATEST" ] || ln -sfn "daily/${STAMP}" "$LATEST"
+
+DISK_LINE="$(du -sh "$DEST" | cut -f1) in ${DEST}, $(df -h --output=avail "$MNT" | tail -1 | tr -d ' ') free"
 
 if [ -n "$FAILED_APPS" ]; then
   # Successful apps keep their snapshot, but the receipt is NOT written, so the
   # dashboard keeps ageing "Last backup" until every app is covered.
   log "=== INCOMPLETE — no backup for:${FAILED_APPS} ==="
-  log "=== total $(du -sh "$DEST" | cut -f1) in ${DEST} ==="
-  notify "no backup for:${FAILED_APPS}"
+  log "=== ${DISK_LINE} ==="
   exit 1
 fi
 
-# Receipt for the dashboard, only on a fully clean run. The timestamp is
-# generated ON THE PI (note the escaped \$) — the dashboard subtracts it from
-# the Pi's clock, so writing this clock would measure skew and can go negative.
-ssh -o BatchMode=yes "$PI" \
-  "sudo install -d -m 0755 /var/lib/rpi-health && \
-   printf '%s %s\\n' \"\$(date +%s)\" \"${STAMP}\" | sudo tee /var/lib/rpi-health/last-backup >/dev/null" \
-  || log "WARNING: could not write the backup receipt to the Pi (dashboard will show this run as missed)"
+# Receipt for the dashboard, only on a fully clean run.
+install -d -m 0755 "$(dirname "$RECEIPT")"
+printf '%s %s\n' "$(date +%s)" "$STAMP" > "$RECEIPT"
 
-log "=== done — total $(du -sh "$DEST" | cut -f1) in ${DEST} ==="
+log "=== done — ${DISK_LINE} ==="

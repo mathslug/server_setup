@@ -28,7 +28,9 @@ TUNNEL=1
 case " $* " in *" --no-tunnel "*) TUNNEL=0 ;; esac
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CREDS="${CREDS_DIR:-${HERE}/backups/latest/host/cloudflared}"
+# Tunnel credentials come from the backup disk on the Pi. CREDS_DIR overrides
+# that with a directory on this machine.
+CREDS="${CREDS_DIR:-}"
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 ok()  { printf '   %s\n' "$*"; }
@@ -42,13 +44,16 @@ ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST" true 2>/dev/null \
 # that boots without it can only be rebuilt from the same LAN.
 BUNDLE_ARG=""
 if [ "$TUNNEL" = "1" ]; then
-  [ -f "${CREDS}/cert.pem" ] || die "no cert.pem in ${CREDS} (--no-tunnel to skip)"
-  ls "${CREDS}"/*.json >/dev/null 2>&1 || die "no tunnel credentials in ${CREDS}"
   ssh "$HOST" 'rm -rf /tmp/cf-prov && mkdir -p /tmp/cf-prov'
-  scp -q "${CREDS}"/* "${HERE}/cloudflared/install.sh" \
+  scp -q "${HERE}/cloudflared/install.sh" \
          "${HERE}/cloudflared/cloudflared.service" "${HOST}:/tmp/cf-prov/"
+  if [ -n "$CREDS" ]; then
+    [ -f "${CREDS}/cert.pem" ] || die "no cert.pem in ${CREDS} (--no-tunnel to skip)"
+    ls "${CREDS}"/*.json >/dev/null 2>&1 || die "no tunnel credentials in ${CREDS}"
+    scp -q "${CREDS}"/* "${HOST}:/tmp/cf-prov/"
+    ok "tunnel credentials staged from ${CREDS}"
+  fi
   BUNDLE_ARG=/tmp/cf-prov
-  ok "tunnel credentials staged from ${CREDS}"
 fi
 
 say "Imaging ${DISK} on ${HOST}"

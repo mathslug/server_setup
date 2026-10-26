@@ -1,0 +1,16 @@
+# Snapshot every app's state onto the backup disk (backup/snapshot.sh).
+#
+# Log: journalctl -u rpi-backup
+
+[Unit]
+Description=Snapshot app state onto the backup disk
+ConditionPathExists=/opt/rpi/backup/snapshot.sh
+# Mounts it if it was plugged in after boot; fails the run if it is absent.
+RequiresMountsFor=/srv/backup
+
+[Service]
+Type=oneshot
+ExecStart=/opt/rpi/backup/snapshot.sh
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=1h

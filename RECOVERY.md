@@ -1,7 +1,8 @@
 # Recovery
 
-Rebuilding from a wiped disk, using this repo plus `backups/latest` on the
-workstation. About 45 minutes, mostly waiting on an image write and a build.
+Rebuilding from a wiped disk, using this repo plus the backup disk, which stays
+plugged into the Pi throughout. About 45 minutes, mostly waiting on an image
+write and a build.
 
 Needs `gh` logged in if any app repo is private.
 
@@ -29,13 +30,18 @@ own. Prefer this when you can reach the machine; see the warning below.
 ### 2. Rebuild the primary
 
 ```
-ssh <host> lsblk                       # confirm which disk is the primary
-./provision-disk.sh <host> /dev/sda    # erases and images it
+ssh <host> lsblk -o NAME,SIZE,MODEL,LABEL   # confirm which disk is the primary
+./provision-disk.sh <host> /dev/sda         # erases and images it
 ```
 
 Writes the image, gives the disk this machine's identity — user, ssh host keys,
 wifi, hostname, timezone — and installs cloudflared, so it comes back reachable
 from anywhere. Does **not** reboot.
+
+With the backup disk attached, `sda` and `sdb` can trade names between boots,
+so read the model column rather than trusting last time's letter. The script
+refuses the disk labelled `pi-backup`, and takes the tunnel credentials from
+it.
 
 ### 3. Boot it
 
@@ -99,25 +105,38 @@ per hostname, new UUID into `config.yml`, delete the orphan.
 provision *from*. Write a card with Raspberry Pi Imager — hostname, ssh key and
 wifi in its settings — boot that, then join at step 2.
 
-**Rolling one app back.** `bootstrap.sh` always restores from `backups/latest`,
-which moves with every successful run. To put a single app back to an older
-copy, call `restore.sh` directly and leave the rest alone:
+**Rolling one app back.** `bootstrap.sh` always restores from
+`/srv/backup/pi/latest`, which moves with every successful snapshot. To put a
+single app back to an older copy, call `restore.sh` directly and leave the rest
+alone:
 
 ```
-BACKUP_SRC=backups/daily/<dated-run> ./backup/restore.sh <app>
+ssh <host> sudo BACKUP_SRC=/srv/backup/pi/daily/<dated-run> /opt/rpi/backup/restore.sh <app>
+```
+
+**Reading the backup disk elsewhere.** It is plain ext4: plug it into any Linux
+machine. `pi/` is ordinary files, root-only because it holds the env files and
+tunnel credentials. `laptop/` is a restic repository, opened with the password
+from wherever you keep it:
+
+```
+restic -r sftp:mypi-remote:/srv/backup/laptop restore latest --target ~/restored
+restic -r /run/media/$USER/pi-backup/laptop mount ~/mnt     # disk plugged in here
 ```
 
 **Restoring a database by hand.** Delete the `-wal` and `-shm` alongside it
 first, or SQLite replays the empty log over what you restored. Check row counts;
 an empty table means you hit exactly that.
 
-**What is not recoverable.** Anything since the last backup.
+**What is not recoverable.** Anything since the last snapshot. And the backup
+disk shares a box, a power supply and a USB bus with the Pi: lose both together
+and the data goes with them.
 
 ## Proving it works
 
 A recovery path nobody has run is a rumour. Take a backup, then run the
 break-glass sequence deliberately. It passes when row counts match
-`backups/latest` and every app answers 200.
+`/srv/backup/pi/latest` and every app answers 200.
 
 Worth doing after any change to provisioning. Four rehearsals turned up eight
 defects that reading the scripts had not, two of which only appear on a cold

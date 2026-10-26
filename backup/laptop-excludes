@@ -1,0 +1,4 @@
+# Left out of laptop-backup.sh. restic --exclude-file syntax; $HOME expands.
+# Regenerable, or already thrown away.
+$HOME/.cache
+$HOME/.local/share/Trash

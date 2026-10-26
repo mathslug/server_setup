@@ -27,16 +27,22 @@ ROOT = Path("/run/rpi-health")
 SAMPLES = ROOT / "samples.tsv"
 WWW = ROOT / "www"
 
-# Written by the laptop's pull-backups.sh after a successful run. Persistent
-# rather than under /run, so a reboot is not mistaken for a missed backup.
+# Written by backup/snapshot.sh, and over ssh by the laptop's laptop-backup.sh,
+# after a clean run. Persistent rather than under /run, so a reboot is not
+# mistaken for a missed backup.
 BACKUP_STAMP = Path("/var/lib/rpi-health/last-backup")
+LAPTOP_STAMP = Path("/var/lib/rpi-health/last-laptop-backup")
 RESCUE_STAMP = Path("/var/lib/rpi-health/rescue")
+BACKUP_MNT = "/srv/backup"
 
-# Backups are daily. One missed day is a laptop that stayed shut; three is a
-# habit that has broken. The gap between those two numbers is deliberate —
-# warning early enough to notice, critical late enough to mean something.
+# Snapshots are daily on a machine that is always on, so one miss is already a
+# fault; three days is one nobody has looked at.
 BACKUP_WARN_S = 30 * 3600
 BACKUP_CRIT_S = 72 * 3600
+# The laptop's is weekly and needs the laptop awake. One missed week is a
+# laptop that stayed shut; two is a habit that has broken.
+LAPTOP_WARN_S = 8 * 86400
+LAPTOP_CRIT_S = 15 * 86400
 INTERVAL_S = 300
 WINDOW_S = 24 * 3600
 HERE = Path(__file__).resolve().parent.parent
@@ -130,19 +136,31 @@ def job_state(j):
     return "warning" if j["age"] < 2 * j["limit"] else "critical"
 
 
-def backup_age():
-    """Seconds since the laptop last completed a backup, or None if never.
+def stamp_age(stamp):
+    """Seconds since a backup last completed, or None if never.
 
-    The backup runs on the laptop and writes this receipt over ssh at the end
-    of a successful run, so a laptop that quietly stops backing up shows up
-    here.
+    Each backup writes its receipt only at the end of a clean run, so one that
+    quietly stops shows up here.
 
     Read from /var/lib, not /run — a reboot must not read as "never backed up".
     """
     try:
-        return int(time.time()) - int(BACKUP_STAMP.read_text().split()[0])
+        return int(time.time()) - int(stamp.read_text().split()[0])
     except (OSError, ValueError, IndexError):
         return None
+
+
+def age_state(age, warn, crit):
+    if age is None or age >= crit:
+        return "critical"
+    return "good" if age < warn else "warning"
+
+
+def backup_disk_free_gb():
+    """Free space on the backup disk, or None if it is not mounted."""
+    if not os.path.ismount(BACKUP_MNT):
+        return None
+    return round(shutil.disk_usage(BACKUP_MNT).free / 1e9)
 
 
 def rescue_disk():
@@ -254,7 +272,9 @@ def sample():
         "throttled": throttled,
         "tunnel": tunnel or "unknown",
         "apps": app_state,
-        "backup_age": backup_age(),
+        "backup_age": stamp_age(BACKUP_STAMP),
+        "laptop_backup_age": stamp_age(LAPTOP_STAMP),
+        "backup_free_gb": backup_disk_free_gb(),
         "uptime": int(uptime),
         "mem_mb": round((mem_total - mem_avail) / 1024),
         "mem_total_mb": round(mem_total / 1024),
@@ -366,11 +386,9 @@ def render(cur, hist):
     ] + [
         # A stale backup counts toward the headline. A row nobody scrolls to is
         # only marginally better than a log nobody opens.
-        "good" if (cur.get("backup_age") is not None
-                   and cur["backup_age"] < BACKUP_WARN_S)
-        else "warning" if (cur.get("backup_age") is not None
-                           and cur["backup_age"] < BACKUP_CRIT_S)
-        else "critical"
+        age_state(cur.get("backup_age"), BACKUP_WARN_S, BACKUP_CRIT_S),
+        age_state(cur.get("laptop_backup_age"), LAPTOP_WARN_S, LAPTOP_CRIT_S),
+        "critical" if cur.get("backup_free_gb") is None else "good",
     ]
     overall = (
         "critical" if "critical" in checks
@@ -421,14 +439,25 @@ def render(cur, hist):
     # freshness: a stale-looking page that was in fact seconds old, which is
     # the exact class of confidently-wrong signal this row exists to prevent.
     bk_age = cur.get("backup_age")
-    if bk_age is None:
-        bk_val, bk_st = "never", "critical"
-        bk_detail = "no completed backup recorded — journalctl --user -u pi-backup on the laptop"
+    bk_st = age_state(bk_age, BACKUP_WARN_S, BACKUP_CRIT_S)
+    bk_val = "never" if bk_age is None else f"{human_dt(bk_age)} ago"
+    free = cur.get("backup_free_gb")
+    if free is None:
+        bk_detail = "backup disk NOT MOUNTED — journalctl -u rpi-backup"
+        bk_st = "critical"
+    elif bk_age is None:
+        bk_detail = "no completed snapshot recorded — journalctl -u rpi-backup"
     else:
-        bk_val = f"{human_dt(bk_age)} ago"
-        bk_st = ("good" if bk_age < BACKUP_WARN_S
-                 else "warning" if bk_age < BACKUP_CRIT_S else "critical")
-        bk_detail = "daily 06:00 pull to the laptop; needs its 30-day Access login"
+        bk_detail = f"daily snapshot to the backup disk; {free} GB free"
+
+    lb_age = cur.get("laptop_backup_age")
+    lb_st = age_state(lb_age, LAPTOP_WARN_S, LAPTOP_CRIT_S)
+    if lb_age is None:
+        lb_val = "never"
+        lb_detail = "no completed run recorded — journalctl --user -u laptop-backup on the laptop"
+    else:
+        lb_val = f"{human_dt(lb_age)} ago"
+        lb_detail = "weekly, to the backup disk; needs its 30-day Access login"
 
     # Drift only. A disk that matches may still not boot, and nothing here can
     # tell you that — pulling the primary and booting it is the only proof.
@@ -449,6 +478,7 @@ def render(cur, hist):
 
     rows = "\n".join(app_rows + [
         row("Last backup", bk_val, bk_detail, bk_st),
+        row("Laptop backup", lb_val, lb_detail, lb_st),
         rescue_row,
         row("cloudflared", cur["tunnel"], "tunnel", "good" if cur["tunnel"] == "active" else "critical"),
         row("Power / thermal", cur["throttled"],
@@ -593,6 +623,7 @@ def summary(cur, hist):
           ]],
         f"  tunnel  {cur['tunnel']}",
         f"  backup  {human_dt(cur['backup_age']) + ' ago' if cur.get('backup_age') is not None else 'NEVER'}",
+        f"  laptop  {human_dt(cur['laptop_backup_age']) + ' ago' if cur.get('laptop_backup_age') is not None else 'NEVER'}",
         f"  uptime24 {ok}/{total} samples all-green",
         f"  uptime  {human_dt(cur['uptime'])}",
     ]) + "\n"

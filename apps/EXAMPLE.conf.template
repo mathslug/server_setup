@@ -58,7 +58,7 @@ LOCAL_PORT=8000
 HEALTH_PATH="/healthz"
 
 # ── Backup ──────────────────────────────────────────────────────────────────
-# BACKUP_DB is the SQLite file inside DATA_SUBDIR. pull-backups.sh snapshots it
+# BACKUP_DB is the SQLite file inside DATA_SUBDIR. backup/snapshot.sh snapshots it
 # with VACUUM INTO, using the Pi's own python3, so the app needs nothing for it.
 #
 # LEAVE BACKUP_DB EMPTY IF THE APP HAS NO DATABASE. AvaLong keeps its whole

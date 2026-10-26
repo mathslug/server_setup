@@ -1,8 +1,8 @@
 # server_setup
 
 Run containerised web apps on a Raspberry Pi: reachable from the internet with
-no open ports, backed up off the box, rebuildable from a wiped disk in half an
-hour. Free tier Cloudflare; no cost beyond the hardware.
+no open ports, backed up to a disk of its own, rebuildable from a wiped disk in
+half an hour. Free tier Cloudflare; no cost beyond the hardware.
 
 Runs two kinds of app: your own, built from its repo on the Pi, and anyone's
 published image, run as is. Each is one conf file plus one Quadlet unit.
@@ -10,7 +10,8 @@ published image, run as is. Each is one conf file plus one Quadlet unit.
 - **No inbound ports** — a Cloudflare Tunnel dials out; dynamic IP is irrelevant
 - **Rootless containers** under a sudo-less account, so an escape lands nowhere
 - **Pull-based deploys** — the Pi polls GitHub; nothing reaches in
-- **Verified backups**, with a restore path that gets exercised
+- **Verified backups** onto an attached disk, with a restore path that gets
+  exercised; the laptop backs itself up to the same disk
 - **A rescue disk** carrying the same tunnel, so a dead primary is not a trip
 
 ## Commands
@@ -19,7 +20,7 @@ Run from the workstation. The disk is always an argument and never defaults —
 a default there is a disk to erase. The image URL defaults; it destroys nothing.
 
 ```
-backup/pull-backups.sh                   pull app state off the Pi
+provision-backup-disk.sh <host> <disk>  erase and format the backup disk
 provision-disk.sh   <host> <disk>        erase and image a disk
 boot-order.sh       <host> [sd|usb]      choose what boots, and boot it
 bootstrap.sh        <host>               everything else, end to end
@@ -39,8 +40,9 @@ apps/<name>.conf  per-app config — repo, ports, backup, health. One file
                   registers an app everywhere
 deploy-app.sh     clone and build, or pull, then start one app
 auto-deploy.sh    redeploy if the branch or unit changed; driven by a timer
-backup/           pull-backups.sh off the Pi, restore.sh back again;
-                  pi-backup.timer runs the pull daily on the laptop
+backup/           snapshot.sh onto the backup disk (rpi-backup.timer, daily),
+                  restore.sh back again; laptop-backup.sh pushes the laptop's
+                  home folder there weekly with restic
 monitor/          health collector, LAN dashboard, rescue-disk check
 cloudflared/      tunnel ingress, install.sh, upgrade.sh, hardened unit
 systemd/          system units + install-units.sh, which keeps
@@ -49,6 +51,8 @@ systemd/          system units + install-units.sh, which keeps
 
 On the Pi: `~podsvc/apps/<name>` is a disposable checkout, `~podsvc/data/<name>`
 is the only thing that matters, `~podsvc/.config/<name>.env` holds secrets.
+`/srv/backup` is the backup disk, mounted by label: `pi/` is plain files,
+`laptop/` is a restic repository.
 
 ## Adding an app
 
@@ -89,9 +93,9 @@ Keep two ssh aliases: direct on the LAN, and through the tunnel from anywhere.
 Give the remote one `HostKeyAlias` pointing at the LAN one, so there is a single
 trusted host key. The ssh key is still required; Access sits in front of sshd.
 
-Backups from the laptop ride the same Access login, which lasts 30 days. When
-it lapses the next run fails with a desktop notification; `ssh mypi-remote
-true` renews it.
+The laptop's backup rides the same Access login, which lasts 30 days. When it
+lapses the next run fails with a desktop notification; `ssh mypi-remote true`
+renews it.
 
 ## Deploys
 
@@ -140,6 +144,7 @@ user manager exits at logout and takes the containers with it.
 ## The blind spot
 
 The dashboard runs *on the Pi*. If the Pi is down there is no dashboard and
-nothing says so. The backup partially covers this — it runs elsewhere and fails
-loudly — but with about a day of latency. For minutes instead, have each
+nothing says so. The laptop's backup partially covers this — it runs elsewhere
+and fails loudly when the Pi is gone — but with up to a week of latency. It
+also warns when the Pi's own snapshots have stopped. For minutes instead, have each
 scheduled job ping an external dead-man's-switch.

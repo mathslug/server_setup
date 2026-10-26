@@ -4,7 +4,7 @@
 #
 #     sudo ./install.sh /path/to/credentials-dir
 #
-# The directory holds what backup/pull-backups.sh saves under host/cloudflared:
+# The directory holds what backup/snapshot.sh saves under host/cloudflared:
 # config.yml, cert.pem, and <tunnel-uuid>.json. Those credentials are issued
 # once by Cloudflare and never reissued, so this only ever copies them in — it
 # cannot create them.

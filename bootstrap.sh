@@ -82,7 +82,7 @@ fi
 # --- Tunnel -----------------------------------------------------------------
 # Before the apps: a broken tunnel is easier to see now than later.
 say "Tunnel"
-"${HERE}/backup/restore.sh" host
+ssh "$HOST" "sudo /opt/rpi/backup/restore.sh host" | sed 's/^/   /'
 ssh "$HOST" 'systemctl is-active --quiet cloudflared' \
   || die "cloudflared did not come up; the apps would be unreachable"
 ok "cloudflared active"
@@ -93,11 +93,11 @@ ok "cloudflared active"
 # and the timer has to be enabled again from here.
 say "Units and timers"
 ssh "$HOST" 'sudo /opt/rpi/systemd/install-units.sh' | sed 's/^/   /'
-ssh "$HOST" "sudo systemctl enable --now rpi-selfupdate.timer rpi-health.timer rpi-rescue-check.timer" >/dev/null 2>&1
+ssh "$HOST" "sudo systemctl enable --now rpi-selfupdate.timer rpi-health.timer rpi-rescue-check.timer rpi-backup.timer" >/dev/null 2>&1
 # Once now, or the dashboard serves an empty page and an unchecked rescue row.
 ssh "$HOST" 'sudo systemctl start rpi-health.service' >/dev/null 2>&1 || true
 ssh "$HOST" 'sudo systemctl start rpi-rescue-check.service' >/dev/null 2>&1 || true
-ok "rpi-selfupdate.timer, rpi-health.timer, rpi-rescue-check.timer"
+ok "rpi-selfupdate.timer, rpi-health.timer, rpi-rescue-check.timer, rpi-backup.timer"
 
 # --- Apps -------------------------------------------------------------------
 # A rebuilt disk has a new podsvc key, so a private repo's old one is dead.
@@ -149,7 +149,7 @@ for APP in "${APPS[@]}"; do
   # Only onto an app that had no data: re-running must not roll a live database
   # back to the last backup.
   if [ "$FORCE_RESTORE" = "1" ] || [ "$HAD_DATA" = "no" ]; then
-    "${HERE}/backup/restore.sh" "$APP"
+    ssh "$HOST" "sudo /opt/rpi/backup/restore.sh ${APP}" | sed 's/^/   /'
   else
     ok "${APP}: data already present, not restoring (--force-restore to overwrite)"
   fi
@@ -191,9 +191,9 @@ check_unit rpi-selfupdate.timer "/opt/rpi will not track this repo"
 for APP in "${APPS[@]}"; do
   appconf_load "$APP"
   [ -n "${BACKUP_DB:-}" ] || continue
-  GZ="${REPO_ROOT_BACKUP:-${HERE}/backups/latest}/${APP}/${BACKUP_DB}.gz"
-  [ -f "$GZ" ] || continue
-  WANT=$(gzip -l "$GZ" 2>/dev/null | awk 'NR==2{print $2}')
+  WANT=$(ssh "$HOST" "sudo gzip -l /srv/backup/pi/latest/${APP}/${BACKUP_DB}.gz" 2>/dev/null \
+           | awk 'NR==2{print $2}')
+  [ -n "$WANT" ] || continue
   GOT=$(ssh "$HOST" "sudo stat -c %s ${DATA_DIR}/${BACKUP_DB} 2>/dev/null || echo 0")
   if [ -n "$WANT" ] && [ "$WANT" -gt 0 ] && [ "$GOT" -lt $(( WANT * 8 / 10 )) ]; then
     warn "${APP}: database is ${GOT} bytes against ${WANT} in the backup — the restore did not take"
@@ -212,9 +212,9 @@ ssh "$HOST" 'echo "   root: $(findmnt -no SOURCE /) $(df -h / | awk "NR==2{print
 if [ "$VERIFY" = "1" ]; then
   say "Row counts"
   # Advisory: a rebuild that serves correctly should not fail because the
-  # workstation could not reach the Pi for a backup.
-  "${HERE}/backup/pull-backups.sh" 2>&1 | grep -E ': ok —|INCOMPLETE|FAILED' | sed 's/^/   /' \
-    || warn "the verification backup did not complete; run ./backup/pull-backups.sh by hand"
+  # backup disk is missing.
+  ssh "$HOST" 'sudo /opt/rpi/backup/snapshot.sh' 2>&1 | grep -E ': ok —|INCOMPLETE|FAILED' | sed 's/^/   /' \
+    || warn "the verification snapshot did not complete; journalctl -u rpi-backup, or run it by hand"
 fi
 
 [ "$FAILED" = "0" ] || die "finished with problems above"

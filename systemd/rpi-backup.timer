@@ -1,0 +1,12 @@
+# After karb's 08:00 UTC daily scan. Snapshotting mid-scan is safe — VACUUM
+# INTO is consistent by construction — but slows both for no reason.
+
+[Unit]
+Description=Daily snapshot of app state onto the backup disk
+
+[Timer]
+OnCalendar=*-*-* 10:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

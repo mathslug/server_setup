@@ -1,0 +1,37 @@
+# Weekly backup of this laptop's home folder to the Pi's backup disk
+# (laptop-backup.sh), started by laptop-backup.timer.
+#
+# A user unit, so ssh uses your own key and your own Access login in
+# ~/.cloudflared, which lasts 30 days. When it lapses the run fails with a
+# desktop notification; `ssh mypi-remote true` renews it.
+#
+# Install, from the checkout at ~/src/server_setup:
+#     d=~/.local/share/systemd/user; mkdir -p $d/timers.target.wants
+#     ln -sf ~/src/server_setup/backup/laptop-backup.service ~/src/server_setup/backup/laptop-backup.timer $d/
+#     ln -sf ../laptop-backup.timer $d/timers.target.wants/
+#     systemctl --user daemon-reload && systemctl --user start laptop-backup.timer
+#
+# Symlinked into ~/.local/share by hand rather than `systemctl --user enable`,
+# which writes into ~/.config — the dotfiles repo. `is-enabled` then reports
+# "disabled", since it only looks in ~/.config; `list-timers` is the truth.
+#
+# Run once now:  systemctl --user start laptop-backup.service
+# Log:           journalctl --user -u laptop-backup
+
+[Unit]
+Description=Back up the home folder to the Pi's backup disk
+
+[Service]
+Type=oneshot
+# A laptop that was off or asleep at the scheduled time runs the missed backup
+# at the next boot or wake, usually before the network is up. Wait for it, but
+# carry on after five minutes regardless, so being offline still fails loudly.
+ExecStartPre=-/usr/bin/nm-online -q --timeout=300
+# Hold off suspend while it runs: a laptop that sleeps mid-transfer freezes it
+# with the socket still open.
+ExecStart=/usr/bin/systemd-inhibit --what=sleep --who=laptop-backup --why="Backing up to the Pi" %h/src/server_setup/backup/laptop-backup.sh
+# With an expired Access login, cloudflared opens a browser to log in, and the
+# run's timeout kills it before anyone could. Keep it from opening unattended.
+UnsetEnvironment=DISPLAY WAYLAND_DISPLAY
+Nice=10
+IOSchedulingClass=idle

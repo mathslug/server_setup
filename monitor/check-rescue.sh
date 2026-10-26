@@ -28,13 +28,15 @@ install -d -m 0755 "$(dirname "$RECEIPT")"
 ROOT_SRC=$(findmnt -no SOURCE /)
 ROOT_DISK=$(lsblk -no PKNAME "$ROOT_SRC" 2>/dev/null)
 
-# Any whole disk that is not the one we booted from. With one candidate this is
-# unambiguous; with several, the first is taken and named in the receipt.
+# Any whole disk that is not the one we booted from or the backup disk. With one
+# candidate this is unambiguous; with several, the first is taken and named in
+# the receipt.
 DISK="${1:-}"
 if [ -z "$DISK" ]; then
   for d in $(lsblk -dno NAME --nodeps 2>/dev/null); do
     case "$d" in zram*|loop*) continue ;; esac
     [ "$d" = "$ROOT_DISK" ] && continue
+    lsblk -no LABEL "/dev/$d" 2>/dev/null | grep -qx pi-backup && continue
     DISK="/dev/$d"; break
   done
 fi

@@ -26,9 +26,10 @@ export LC_ALL=C LANG=C
 
 DISK="${1:?usage: $0 <disk> <image-url> [tunnel-bundle-dir]}"
 IMG_URL="${2:?usage: $0 <disk> <image-url> [tunnel-bundle-dir]}"
-# A directory holding cloudflared's install.sh, cloudflared.service, and the
-# tunnel credentials. Optional, but without it the disk boots reachable only
-# from the LAN — see the cloudflared section below.
+# A directory holding cloudflared's install.sh and cloudflared.service, plus
+# the tunnel credentials if they come from the laptop rather than the backup
+# disk. Optional, but without it the disk boots reachable only from the LAN —
+# see the cloudflared section below.
 BUNDLE="${3:-}"
 WHO="${SUDO_USER:-$(id -un)}"
 MNT=/mnt/newroot
@@ -51,6 +52,25 @@ case "$(findmnt -no SOURCE /)" in
   "${DISK}"*) die "$DISK holds the running root filesystem" ;;
 esac
 id "$WHO" >/dev/null 2>&1 || die "no such user to copy: $WHO"
+# It holds the backups a rebuild restores from, and with it attached sda and
+# sdb can trade names between boots.
+! lsblk -no LABEL "$DISK" | grep -qx pi-backup || die "$DISK is the backup disk"
+
+# Tunnel credentials come from the backup disk unless the laptop sent some.
+# Before imaging, so a missing disk fails before anything is erased.
+if [ -n "$BUNDLE" ] && ! ls "$BUNDLE"/*.json >/dev/null 2>&1; then
+  BK_DEV=$(blkid -L pi-backup) || die "no tunnel credentials sent and no backup disk attached"
+  BK_MNT=$(findmnt -no TARGET --source "$BK_DEV" | head -1)
+  if [ -z "$BK_MNT" ]; then
+    BK_MNT=/mnt/pi-backup-ro
+    mkdir -p "$BK_MNT"
+    mount -o ro "$BK_DEV" "$BK_MNT"
+  fi
+  cp "${BK_MNT}/pi/latest/host/cloudflared/"* "$BUNDLE/" \
+    || die "no tunnel credentials in ${BK_MNT}/pi/latest/host/cloudflared"
+  ok "tunnel credentials from the backup disk, $(readlink "${BK_MNT}/pi/latest")"
+  [ "$BK_MNT" != /mnt/pi-backup-ro ] || umount "$BK_MNT"
+fi
 
 cleanup() {
   for m in "$MNT/sys" "$MNT/proc" "$MNT/dev/pts" "$MNT/dev" \

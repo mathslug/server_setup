@@ -1,0 +1,15 @@
+# Starts laptop-backup.service weekly; install instructions are in that file.
+#
+# Local on purpose: this follows the laptop, not the Pi. Midday Sunday, when
+# the laptop is likelier to be open than at night.
+
+[Unit]
+Description=Weekly backup of the home folder to the Pi
+
+[Timer]
+OnCalendar=Sun *-*-* 12:00:00
+# Missed while off or asleep: run once at the next boot or wake.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
