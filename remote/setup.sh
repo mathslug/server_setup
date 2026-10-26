@@ -263,6 +263,19 @@ say "Backup disk"
 # Formatting one is provision-backup-disk.sh's job; this mounts what is there.
 FSTAB_LINE="LABEL=pi-backup /srv/backup ext4 defaults,noatime,nofail,x-systemd.device-timeout=30s 0 2"
 sudo install -d -m 0755 /srv/backup
+# The Seagate's USB bridge reset under hours of sustained writes over UAS
+# (iuCRC errors), aborting the ext4 journal. 'u' keeps it on plain
+# usb-storage. Takes effect at the next boot.
+QUIRK="0bc2:2344:u"
+if ! grep -q "usb-storage.quirks=[^ ]*${QUIRK}" "$CMDLINE"; then
+  sudo cp "$CMDLINE" "${CMDLINE}.bak.$(date +%Y%m%d%H%M%S)"
+  if grep -q "usb-storage.quirks=" "$CMDLINE"; then
+    sudo sed -i "1 s/usb-storage.quirks=\([^ ]*\)/usb-storage.quirks=\1,${QUIRK}/" "$CMDLINE"
+  else
+    sudo sed -i "1 s/\$/ usb-storage.quirks=${QUIRK}/" "$CMDLINE"
+  fi
+  ok "UAS disabled for ${QUIRK%:u} in $CMDLINE (next boot)"
+fi
 if ! grep -qxF "$FSTAB_LINE" /etc/fstab; then
   sudo sed -i '/^LABEL=pi-backup /d' /etc/fstab
   echo "$FSTAB_LINE" | sudo tee -a /etc/fstab >/dev/null
