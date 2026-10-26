@@ -4,6 +4,7 @@
 #
 # Run on the Pi, daily by rpi-backup.timer, or by hand:
 #     sudo /opt/rpi/backup/snapshot.sh
+#     sudo /opt/rpi/backup/snapshot.sh --out DIR   # one snapshot into DIR only
 #
 # Writes /srv/backup/pi/{daily,weekly}/<stamp> as plain files: each database
 # gzipped, BACKUP_DIRS copied, env files, the tunnel credentials. `latest`
@@ -35,6 +36,14 @@ RUN="${DEST}/daily/${STAMP}"
 LATEST="${DEST}/latest"
 REPO_ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 
+# --out: a verified snapshot into DIR and nothing else — no backup disk, no
+# retention, no receipt. For backup/pull-to-laptop.sh to carry off the Pi.
+OUT=""
+if [ "${1:-}" = "--out" ]; then
+  OUT="${2:?--out needs a directory}"
+  RUN="$OUT"
+fi
+
 # shellcheck disable=SC1091
 . "${REPO_ROOT}/lib/appconf.sh"
 
@@ -46,13 +55,19 @@ app_fail() { log "FAILED: $*"; return 1; }
 FAILED_APPS=""
 
 [ "$(id -u)" = 0 ] || fail "run with sudo"
-mountpoint -q "$MNT" || fail "${MNT} is not mounted — is the backup disk attached?"
 exec 9>/run/rpi-backup.lock
 flock -n 9 || fail "another snapshot is already running"
 
-# .tmp on the disk, not /tmp: that is tmpfs here, and a database decompressed
-# for verification would sit in RAM next to the apps.
-install -d -m 0700 "$DEST" "${DEST}/daily" "${DEST}/weekly" "${DEST}/.tmp"
+# Verification decompresses beside the snapshot, not in /tmp: that is tmpfs
+# here, and a database there would sit in RAM next to the apps.
+if [ -n "$OUT" ]; then
+  VTMP="${OUT}/.tmp"
+else
+  mountpoint -q "$MNT" || fail "${MNT} is not mounted — is the backup disk attached?"
+  VTMP="${DEST}/.tmp"
+  install -d -m 0700 "$DEST" "${DEST}/daily" "${DEST}/weekly"
+fi
+install -d -m 0700 "$RUN" "$VTMP"
 
 log "=== snapshot ${STAMP} ==="
 
@@ -96,7 +111,7 @@ PY
   FILES=0
   for DIR in ${BACKUP_DIRS:-}; do
     LINK_ARG=""
-    [ -d "${LATEST}/${APP}/${DIR}" ] && LINK_ARG="--link-dest=${LATEST}/${APP}/${DIR}"
+    [ -z "$OUT" ] && [ -d "${LATEST}/${APP}/${DIR}" ] && LINK_ARG="--link-dest=${LATEST}/${APP}/${DIR}"
     rsync -a $LINK_ARG "${DATA_DIR}/${DIR}/" "${RUN}/${APP}/${DIR}/" \
       || { app_fail "${APP}: ${DIR} rsync failed"; return 1; }
     FILES=$(( FILES + $(find "${RUN}/${APP}/${DIR}" -type f 2>/dev/null | wc -l) ))
@@ -114,7 +129,7 @@ PY
     return 0
   fi
 
-  TMPDB=$(mktemp "${DEST}/.tmp/verify.XXXXXX")
+  TMPDB=$(mktemp "${VTMP}/verify.XXXXXX")
   gunzip -c "${RUN}/${APP}/${BACKUP_DB}.gz" > "$TMPDB" \
     || { rm -f "$TMPDB"; app_fail "${APP}: snapshot will not decompress"; return 1; }
   RESULT=$(python3 -I - "$TMPDB" <<'PY'
@@ -161,6 +176,13 @@ for f in /etc/cloudflared/config.yml /root/.cloudflared/cert.pem "$CRED"; do
   install -m 0600 "$f" "${RUN}/host/cloudflared/" || fail "host: could not read $f"
 done
 log "host: cloudflared config + tunnel credentials"
+
+if [ -n "$OUT" ]; then
+  rmdir "$VTMP"
+  [ -z "$FAILED_APPS" ] || { log "=== INCOMPLETE — no backup for:${FAILED_APPS} ==="; exit 1; }
+  log "=== done — $(du -sh "$OUT" | cut -f1) in ${OUT} ==="
+  exit 0
+fi
 
 # Promote to `latest` so tomorrow's run can hardlink against this one. Relative,
 # so it still resolves with the disk mounted somewhere else.

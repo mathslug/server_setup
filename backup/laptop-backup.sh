@@ -20,8 +20,7 @@
 
 set -euo pipefail
 
-# Set PI_HOST to force a host; otherwise chosen by the reachability check below.
-PI="${PI_HOST:-}"
+# Set PI_HOST to force a host; otherwise the LAN, then the tunnel.
 REPO_PATH=/srv/backup/laptop
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export RESTIC_PASSWORD_FILE="${RESTIC_PASSWORD_FILE:-${HOME}/.local/share/laptop-backup/password}"
@@ -46,34 +45,9 @@ command -v restic >/dev/null 2>&1 || fail "restic is not installed"
 
 log "=== laptop backup ==="
 
-# LAN first, tunnel second. `timeout`, not just ConnectTimeout: with an expired
-# Access login `cloudflared access ssh` blocks on a browser login nobody answers.
-#
-# Each failure logs ssh's own last line. A run once failed on the tunnel in
-# under a second without reaching the Pi, and with the error discarded there
-# was nothing to say why.
-try_host() {
-  local err rc
-  err=$(timeout 30 ssh -o ConnectTimeout=10 -o BatchMode=yes "$1" true 2>&1) && return 0
-  rc=$?
-  [ "$rc" = 124 ] && err="no answer in 30s"
-  log "  ${1}: $(printf '%s' "$err" | tail -1)"
-  return 1
-}
-
-if [ -n "$PI" ]; then
-  try_host "$PI" || fail "cannot reach ${PI} over ssh"
-else
-  # Three rounds: one dropped tunnel handshake should not cost a week's backup.
-  for ROUND in 1 2 3; do
-    for CANDIDATE in mypi mypi-remote; do
-      if try_host "$CANDIDATE"; then PI="$CANDIDATE"; break 2; fi
-    done
-    [ "$ROUND" = 3 ] || sleep 20
-  done
-  # Off the LAN, the usual cause is the 30-day Access login lapsing.
-  [ -n "$PI" ] || fail "cannot reach the Pi on the LAN (mypi) or the tunnel (mypi-remote) — if the Access login expired, \`ssh mypi-remote true\` renews it"
-fi
+# shellcheck disable=SC1091
+. "${HERE}/../lib/pihost.sh"
+pick_pi
 log "reaching the Pi as '${PI}'"
 
 export RESTIC_REPOSITORY="sftp:${PI}:${REPO_PATH}"

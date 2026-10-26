@@ -128,6 +128,16 @@ restic -r /run/media/$USER/pi-backup/laptop mount ~/mnt     # disk plugged in he
 first, or SQLite replays the empty log over what you restored. Check row counts;
 an empty table means you hit exactly that.
 
+**The backup disk is gone too.** Only what `backup/pull-to-laptop.sh` last
+kept on the laptop survives, in `backups/latest`. Its tunnel credentials go to
+step 2 as `CREDS_DIR=backups/latest/host/cloudflared ./provision-disk.sh ...`.
+At step 4, copy it to the Pi and restore from there:
+
+```
+rsync -a backups/latest/ <host>:/var/tmp/anchor/
+BACKUP_SRC=/var/tmp/anchor ./bootstrap.sh <host>
+```
+
 **What is not recoverable.** Anything since the last snapshot. And the backup
 disk shares a box, a power supply and a USB bus with the Pi: lose both together
 and the data goes with them.

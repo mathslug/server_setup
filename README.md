@@ -21,6 +21,7 @@ a default there is a disk to erase. The image URL defaults; it destroys nothing.
 
 ```
 provision-backup-disk.sh <host> <disk>  erase and format the backup disk
+backup/pull-to-laptop.sh                 by hand: a fresh snapshot of the Pi, kept here
 provision-disk.sh   <host> <disk>        erase and image a disk
 boot-order.sh       <host> [sd|usb]      choose what boots, and boot it
 bootstrap.sh        <host>               everything else, end to end
@@ -42,7 +43,8 @@ deploy-app.sh     clone and build, or pull, then start one app
 auto-deploy.sh    redeploy if the branch or unit changed; driven by a timer
 backup/           snapshot.sh onto the backup disk (rpi-backup.timer, daily),
                   restore.sh back again; laptop-backup.sh pushes the laptop's
-                  home folder there weekly with restic
+                  home folder there weekly with restic; pull-to-laptop.sh
+                  keeps an extra copy of the Pi here, when run by hand
 monitor/          health collector, LAN dashboard, rescue-disk check
 cloudflared/      tunnel ingress, install.sh, upgrade.sh, hardened unit
 systemd/          system units + install-units.sh, which keeps

@@ -32,6 +32,9 @@ done
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-420}"
+# A backup directory ON THE PI to restore from. The backup disk unless set,
+# e.g. to a laptop anchor copied over when that disk is gone (RECOVERY.md).
+SRC="${BACKUP_SRC:-/srv/backup/pi/latest}"
 # shellcheck disable=SC1091
 . "${HERE}/lib/appconf.sh"
 
@@ -82,7 +85,7 @@ fi
 # --- Tunnel -----------------------------------------------------------------
 # Before the apps: a broken tunnel is easier to see now than later.
 say "Tunnel"
-ssh "$HOST" "sudo /opt/rpi/backup/restore.sh host" | sed 's/^/   /'
+ssh "$HOST" "sudo env BACKUP_SRC='${SRC}' /opt/rpi/backup/restore.sh host" | sed 's/^/   /'
 ssh "$HOST" 'systemctl is-active --quiet cloudflared' \
   || die "cloudflared did not come up; the apps would be unreachable"
 ok "cloudflared active"
@@ -149,7 +152,7 @@ for APP in "${APPS[@]}"; do
   # Only onto an app that had no data: re-running must not roll a live database
   # back to the last backup.
   if [ "$FORCE_RESTORE" = "1" ] || [ "$HAD_DATA" = "no" ]; then
-    ssh "$HOST" "sudo /opt/rpi/backup/restore.sh ${APP}" | sed 's/^/   /'
+    ssh "$HOST" "sudo env BACKUP_SRC='${SRC}' /opt/rpi/backup/restore.sh ${APP}" | sed 's/^/   /'
   else
     ok "${APP}: data already present, not restoring (--force-restore to overwrite)"
   fi
@@ -191,7 +194,7 @@ check_unit rpi-selfupdate.timer "/opt/rpi will not track this repo"
 for APP in "${APPS[@]}"; do
   appconf_load "$APP"
   [ -n "${BACKUP_DB:-}" ] || continue
-  WANT=$(ssh "$HOST" "sudo gzip -l /srv/backup/pi/latest/${APP}/${BACKUP_DB}.gz" 2>/dev/null \
+  WANT=$(ssh "$HOST" "sudo gzip -l '${SRC}/${APP}/${BACKUP_DB}.gz'" 2>/dev/null \
            | awk 'NR==2{print $2}')
   [ -n "$WANT" ] || continue
   GOT=$(ssh "$HOST" "sudo stat -c %s ${DATA_DIR}/${BACKUP_DB} 2>/dev/null || echo 0")
