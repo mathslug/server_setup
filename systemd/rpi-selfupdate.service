@@ -28,4 +28,7 @@ ExecStart=/opt/rpi/systemd/install-units.sh
 # the first time an app is added, silently and without error. The script
 # validates before reloading, and is a no-op when nothing changed.
 ExecStart=/opt/rpi/cloudflared/render-config.sh
+# Nothing else upgrades cloudflared: it is a .deb from GitHub, not an apt repo.
+# Last, because a new release restarts the tunnel.
+ExecStart=/opt/rpi/cloudflared/upgrade.sh
 TimeoutStartSec=5min

@@ -42,7 +42,7 @@ auto-deploy.sh    redeploy if the branch or unit changed; driven by a timer
 backup/           pull-backups.sh off the Pi, restore.sh back again;
                   pi-backup.timer runs the pull daily on the laptop
 monitor/          health collector, LAN dashboard, rescue-disk check
-cloudflared/      tunnel ingress, install.sh, hardened unit
+cloudflared/      tunnel ingress, install.sh, upgrade.sh, hardened unit
 systemd/          system units + install-units.sh, which keeps
                   /etc/systemd/system in step with this directory
 ```
