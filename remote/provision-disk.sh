@@ -250,5 +250,7 @@ if [ -n "$BUNDLE" ]; then
 fi
 ok "ok"
 
-sync
+# Only the new disk: a bare sync waits on every disk, and a wedged backup disk
+# stalled this for 18 minutes.
+sync -f "$MNT" "$MNT/boot/firmware"
 say "${DISK} is bootable — reboot to use it"
