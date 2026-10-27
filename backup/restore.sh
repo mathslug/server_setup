@@ -51,6 +51,20 @@ restore_host() {
   log "--- host ---"
   [ -d "${SRC}/host/cloudflared" ] || die "no host/cloudflared in the backup"
   "${REPO_ROOT}/cloudflared/install.sh" "${SRC}/host/cloudflared"
+  # Newer wins, so a live system's own receipts are never rolled back.
+  local f dst n=0
+  for f in "${SRC}"/host/receipts/jobs/* "${SRC}/host/receipts/last-laptop-backup"; do
+    [ -f "$f" ] || continue
+    case "$f" in
+      */jobs/*) dst="/var/lib/rpi-health/jobs/${f##*/}" ;;
+      *)        dst="/var/lib/rpi-health/${f##*/}" ;;
+    esac
+    [ ! -f "$dst" ] || [ "$(awk '{print $1; exit}' "$dst")" -lt "$(awk '{print $1; exit}' "$f")" ] || continue
+    install -m 0664 "$f" "$dst"
+    n=$((n + 1))
+  done
+  chown -R "${SERVICE_USER}:${SERVICE_USER}" /var/lib/rpi-health/jobs
+  log "host: ${n} receipt(s) restored"
 }
 
 restore_app() {

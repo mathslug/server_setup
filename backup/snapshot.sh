@@ -176,6 +176,12 @@ for f in /etc/cloudflared/config.yml /root/.cloudflared/cert.pem "$CRED"; do
   install -m 0600 "$f" "${RUN}/host/cloudflared/" || fail "host: could not read $f"
 done
 log "host: cloudflared config + tunnel credentials"
+# Receipts, or a rebuilt Pi shows every job and the laptop backup as never run
+# until each runs again — up to a week for the laptop.
+install -d -m 0700 "${RUN}/host/receipts/jobs"
+cp -p /var/lib/rpi-health/jobs/* "${RUN}/host/receipts/jobs/" 2>/dev/null || true
+cp -p /var/lib/rpi-health/last-laptop-backup "${RUN}/host/receipts/" 2>/dev/null || true
+log "host: $(ls -1 "${RUN}/host/receipts/jobs" | wc -l) job receipt(s)"
 
 if [ -n "$OUT" ]; then
   rmdir "$VTMP"
