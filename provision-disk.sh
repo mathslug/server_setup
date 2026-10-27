@@ -65,5 +65,9 @@ echo "   Nothing has switched over — ${HOST} is still running from"
 echo "   $(ssh "$HOST" 'findmnt -no SOURCE /'), and boots this disk only when the boot order"
 echo "   reaches it."
 echo
-echo "   To boot it now:  ./boot-order.sh ${HOST} usb --reboot"
-echo "   Then:            ./bootstrap.sh ${HOST}"
+# An SD card is the rescue card, which is never bootstrapped.
+case "$DISK" in
+  /dev/mmcblk*) echo "   To boot it now:  ./boot-order.sh ${HOST} sd --reboot" ;;
+  *)            echo "   To boot it now:  ./boot-order.sh ${HOST} usb --reboot"
+                echo "   Then:            ./bootstrap.sh ${HOST}" ;;
+esac
