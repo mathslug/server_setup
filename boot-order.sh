@@ -66,9 +66,12 @@ ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST" true 2>/dev/null \
 CUR=$(order_active)
 [ -n "$CUR" ] || die "no BOOT_ORDER in the bootloader config on ${HOST}"
 PENDING=$(order_staged)
+bootloader() { ssh "$HOST" 'vcgencmd bootloader_version | head -1'; }
+BL_BEFORE=$(bootloader)
 
 say "Current"
 ok "BOOT_ORDER=${CUR} — $(describe "$CUR")"
+ok "bootloader ${BL_BEFORE}"
 ok "booted from $(ssh "$HOST" 'findmnt -no SOURCE /')"
 if [ -n "$PENDING" ] && [ "$PENDING" != "$CUR" ]; then
   ok "PENDING: ${PENDING} — $(describe "$PENDING") — takes effect on the next boot"
@@ -141,4 +144,18 @@ case "${WANT}:${ROOT}" in
   sd:/dev/mmcblk*|usb:/dev/sd*) ;;
   *) die "asked for ${WANT} but ${HOST} booted from ${ROOT}: the ${WANT} disk did not boot" ;;
 esac
+# --apply writes the newest bootloader the running disk carries, not only the
+# order. A new one has now booted this disk but not yet the other.
+BL_AFTER=$(bootloader)
+ok "bootloader ${BL_AFTER}"
+if [ "$BL_AFTER" != "$BL_BEFORE" ]; then
+  echo
+  echo "   THE BOOTLOADER CHANGED (${BL_BEFORE} -> ${BL_AFTER})."
+  if [ "$WANT" = usb ]; then
+    echo "   The rescue card has not booted on it. Prove the fallback:"
+    echo "   ${0} ${HOST} sd --reboot, then ${0} ${HOST} usb --reboot"
+  else
+    echo "   The primary has not booted on it; switching back with usb proves it."
+  fi
+fi
 ok "$(ssh "$HOST" 'df -h / | awk "NR==2{print \$2\" filesystem\"}"')"
