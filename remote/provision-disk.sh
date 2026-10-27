@@ -18,6 +18,8 @@
 #     password hash.
 
 set -euo pipefail
+# set -e exits without a word; say where.
+trap 'echo "provision-disk: failed at line ${LINENO}: ${BASH_COMMAND}" >&2' ERR
 
 # ssh carries the client's LANG across, and the image being built has not
 # generated that locale yet, so perl and apt warn on every invocation inside
@@ -60,7 +62,8 @@ id "$WHO" >/dev/null 2>&1 || die "no such user to copy: $WHO"
 # Before imaging, so a missing disk fails before anything is erased.
 if [ -n "$BUNDLE" ] && ! ls "$BUNDLE"/*.json >/dev/null 2>&1; then
   BK_DEV=$(blkid -L pi-backup) || die "no tunnel credentials sent and no backup disk attached"
-  BK_MNT=$(findmnt -no TARGET --source "$BK_DEV" | head -1)
+  # findmnt exits 1 when it is not mounted, as on the rescue card.
+  BK_MNT=$(findmnt -no TARGET --source "$BK_DEV" | head -1 || true)
   if [ -z "$BK_MNT" ]; then
     BK_MNT=/mnt/pi-backup-ro
     mkdir -p "$BK_MNT"
