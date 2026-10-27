@@ -53,6 +53,10 @@ wait_for_host() {
 
 ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST" true 2>/dev/null \
   || die "cannot reach ${HOST} over ssh"
+# The SD card is the rescue card; a server built on it is not the server.
+case "$(ssh "$HOST" 'findmnt -no SOURCE /')" in
+  /dev/mmcblk*) die "${HOST} is running from the SD card; boot the primary: ./boot-order.sh ${HOST} usb --reboot" ;;
+esac
 
 # --- Base system ------------------------------------------------------------
 say "Base system"
