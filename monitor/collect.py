@@ -18,7 +18,6 @@ keep working when the thing it is monitoring is the thing that is broken.
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import time
@@ -45,9 +44,6 @@ BACKUP_CRIT_S = 72 * 3600
 # laptop that stayed shut; two is a habit that has broken.
 LAPTOP_WARN_S = 8 * 86400
 LAPTOP_CRIT_S = 15 * 86400
-# Kernels install unattended but apply only on reboot, which is rare here.
-# A week lets a bad kernel be pulled before it is asked for.
-REBOOT_WARN_S = 7 * 86400
 INTERVAL_S = 300
 WINDOW_S = 24 * 3600
 HERE = Path(__file__).resolve().parent.parent
@@ -159,21 +155,6 @@ def age_state(age, warn, crit):
     if age is None or age >= crit:
         return "critical"
     return "good" if age < warn else "warning"
-
-
-def kernel_pending():
-    """(newer installed kernel, seconds since installed) or None if the running
-    one is the newest. Compares within the running flavour (rpi-v8, not 2712)."""
-    run = os.uname().release                       # 6.18.50+rpt-rpi-v8
-    flavour = run.partition("+")[2]
-    def key(v):
-        return tuple(int(x) for x in re.findall(r"\d+", v.partition("+")[0]))
-    newer = [p for p in Path("/lib/modules").glob(f"*+{flavour}") if key(p.name) > key(run)]
-    if not newer:
-        return None
-    p = max(newer, key=lambda p: key(p.name))
-    # ctime, not mtime: dpkg stamps mtime with the package's build date.
-    return p.name, int(time.time() - p.stat().st_ctime)
 
 
 def backup_disk_free_gb():
@@ -323,8 +304,6 @@ def sample():
         "laptop_backup_age": stamp_age(LAPTOP_STAMP),
         "backup_free_gb": backup_disk_free_gb(),
         "uptime": int(uptime),
-        "kernel": os.uname().release,
-        "kernel_pending": kernel_pending(),
         "mem_mb": round((mem_total - mem_avail) / 1024),
         "mem_total_mb": round(mem_total / 1024),
         "disk_free_gb": round(du.free / 1e9, 1),
@@ -390,11 +369,6 @@ def spark(values, w=150, h=32):
 ICON = {"good": "●", "warning": "▲", "critical": "■", "unknown": "?"}
 
 
-def kernel_state(cur):
-    kp = cur.get("kernel_pending")
-    return "good" if not kp or kp[1] < REBOOT_WARN_S else "warning"
-
-
 def tile(label, value, unit, sub, st, values):
     return f"""    <div class="tile">
       <div class="tile-label">{label}</div>
@@ -443,7 +417,6 @@ def render(cur, hist):
         age_state(cur.get("backup_age"), BACKUP_WARN_S, BACKUP_CRIT_S),
         age_state(cur.get("laptop_backup_age"), LAPTOP_WARN_S, LAPTOP_CRIT_S),
         "critical" if cur.get("backup_free_gb") is None else "good",
-        kernel_state(cur),
     ] + [
         # A disk going bad is the slow failure nothing else here would show.
         st for _, _, _, st in disk_rows()
@@ -543,12 +516,6 @@ def render(cur, hist):
         row("Power / thermal", cur["throttled"],
             "0x0 is healthy",
             "good" if cur["throttled"] == "0x0" else "warning"),
-        row("Kernel",
-            "reboot pending" if cur.get("kernel_pending") else "up to date",
-            (f"{cur['kernel_pending'][0]} installed {human_dt(cur['kernel_pending'][1])} ago; "
-             f"running {cur.get('kernel', '?')}") if cur.get("kernel_pending")
-            else f"running {cur.get('kernel', '?')}",
-            kernel_state(cur)),
         row("Uptime", human_dt(cur["uptime"]), "since last boot", "good"),
     ])
 
@@ -691,8 +658,6 @@ def summary(cur, hist):
         f"  laptop  {human_dt(cur['laptop_backup_age']) + ' ago' if cur.get('laptop_backup_age') is not None else 'NEVER'}",
         *[f"  {label}: {val}" for label, val, _, _ in disk_rows()],
         f"  uptime24 {ok}/{total} samples all-green",
-        f"  kernel  {cur.get('kernel', '?')}"
-        + (f" — REBOOT PENDING for {cur['kernel_pending'][0]}" if cur.get("kernel_pending") else ""),
         f"  uptime  {human_dt(cur['uptime'])}",
     ]) + "\n"
 

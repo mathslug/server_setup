@@ -47,7 +47,7 @@ backup/           snapshot.sh onto the backup disk (rpi-backup.timer, daily),
                   keeps an extra copy of the Pi here, when run by hand
 monitor/          health collector, LAN dashboard, rescue-disk check,
                   daily SMART check of every disk
-cloudflared/      tunnel ingress, install.sh, upgrade.sh, hardened unit
+cloudflared/      tunnel ingress, install.sh, hardened unit
 systemd/          system units + install-units.sh, which keeps
                   /etc/systemd/system in step with this directory
 ```

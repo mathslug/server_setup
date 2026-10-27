@@ -155,26 +155,20 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-say "Unattended upgrades"
+say "Unattended security upgrades"
 # ---------------------------------------------------------------------------
+# Debian's security fixes only. Everything else on the bare metal, Raspberry
+# Pi's kernel, firmware and bootloader included, updates in a rehearsal rebuild.
 sudo DEBIAN_FRONTEND=noninteractive apt-get -y install unattended-upgrades >/dev/null
 sudo tee /etc/apt/apt.conf.d/20auto-upgrades >/dev/null <<'EOF'
 APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 EOF
-# Debian's defaults allow only Debian's archive, but the kernel, firmware and
-# libc come from Raspberry Pi's, so they never updated. A new kernel takes
-# effect at the next reboot. Appends to the list in 50unattended-upgrades.
-sudo tee /etc/apt/apt.conf.d/52unattended-upgrades-rpi >/dev/null <<'EOF'
-Unattended-Upgrade::Origins-Pattern {
-        "origin=Raspberry Pi Foundation,codename=${distro_codename}";
-        "origin=Debian,codename=${distro_codename}-updates";
-};
-EOF
+sudo rm -f /etc/apt/apt.conf.d/52unattended-upgrades-rpi
 sudo systemctl enable --now unattended-upgrades >/dev/null 2>&1 || true
-ok "enabled: Debian, its security and -updates archives, and Raspberry Pi's"
-# Not the bootloader, though: both disks boot through it, and this unit flashes
-# it unattended at the next boot after rpi-eeprom updates. RECOVERY.md has when.
+ok "enabled"
+# The bootloader changes only through boot-order.sh in a rehearsal. This unit
+# would otherwise flash it at boot whenever this disk carries a newer one.
 sudo systemctl mask rpi-eeprom-update.service >/dev/null 2>&1 || true
 ok "bootloader: never flashed automatically ($(systemctl is-enabled rpi-eeprom-update.service 2>/dev/null))"
 
