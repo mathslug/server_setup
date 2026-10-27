@@ -43,7 +43,7 @@ set -euo pipefail
 # See remote/provision-disk.sh: the client's LANG arrives over ssh and the
 # image has not generated it, so apt warns on every call inside the chroot.
 export LC_ALL=C LANG=C
-DISK="$1"; TOOLS="$2"
+DISK=$(readlink -f "$1"); TOOLS="$2"
 MNT=/mnt/rescue
 # sda2, but mmcblk0p2 and nvme0n1p2 — a name ending in a digit takes a p.
 case "$DISK" in

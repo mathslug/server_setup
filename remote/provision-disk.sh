@@ -26,7 +26,8 @@ trap 'echo "provision-disk: failed at line ${LINENO}: ${BASH_COMMAND}" >&2' ERR
 # the chroot. Nothing here depends on collation or formatting.
 export LC_ALL=C LANG=C
 
-DISK="${1:?usage: $0 <disk> <image-url> [tunnel-bundle-dir]}"
+# A /dev/disk/by-id path resolves to /dev/sdX, which the partition naming needs.
+DISK=$(readlink -f "${1:?usage: $0 <disk> <image-url> [tunnel-bundle-dir]}")
 IMG_URL="${2:?usage: $0 <disk> <image-url> [tunnel-bundle-dir]}"
 # A directory holding cloudflared's install.sh and cloudflared.service, plus
 # the tunnel credentials if they come from the laptop rather than the backup

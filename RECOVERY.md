@@ -176,20 +176,19 @@ A recovery path nobody has run is a rumour. The rehearsal is the break-glass
 sequence run deliberately, and it is also how the bare metal gets updated:
 
 ```
-./provision-rescue.sh <host> /dev/mmcblk0             # a fresh rescue card
-ssh <host> sudo systemctl start rpi-backup.service    # snapshot, now
-./backup/pull-to-laptop.sh                            # a copy off the box too
-./boot-order.sh <host> sd --reboot
-ssh <host> lsblk -o NAME,SIZE,MODEL,LABEL             # find the primary
-./provision-disk.sh <host> /dev/sdX
-./boot-order.sh <host> usb --reboot
-./bootstrap.sh <host> --swap-mb 8192
+ssh <host> ls -l /dev/disk/by-id                      # name both disks stably
+./rehearse.sh <host> /dev/disk/by-id/<primary> /dev/disk/by-id/<rescue card> --dry-run
+./rehearse.sh <host> /dev/disk/by-id/<primary> /dev/disk/by-id/<rescue card>
 ```
 
-Plus the round trip, if `boot-order.sh` said the bootloader changed. It passes
-when every step ran without a hand on anything, row counts match
-`/srv/backup/pi/latest` and every app answers 200. The apps are down from the
-reboot onto the card to the end of bootstrap, about 25 minutes.
+It rebuilds the rescue card, snapshots onto the backup disk, copies the Pi to
+the laptop, boots the card, reimages the primary, boots it and bootstraps it.
+If the bootloader changed along the way, it then does the round trip. It stops
+at the first failure and says what state that leaves the Pi in; each step is
+also its own script, so it can be finished by hand from there. It passes when
+it reaches the end: every app answering 200, and row counts matching
+`/srv/backup/pi/latest`. The apps are down from the reboot onto the card to the
+end of bootstrap, about 25 minutes.
 
 Worth doing after any change to provisioning, too. Four rehearsals in August
 turned up eight defects that reading the scripts had not, two of which only

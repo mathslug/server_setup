@@ -26,6 +26,7 @@ provision-disk.sh   <host> <disk>        erase and image a disk
 boot-order.sh       <host> [sd|usb]      choose what boots, and boot it
 bootstrap.sh        <host>               everything else, end to end
 provision-rescue.sh <host> <disk>        the fallback disk
+rehearse.sh <host> <primary> <rescue>    all of the above but the backup disk, in order
 ```
 
 Imaging and booting are separate: a rescue disk is built so it will *not* boot,

@@ -67,7 +67,7 @@ echo "   reaches it."
 echo
 # An SD card is the rescue card, which is never bootstrapped.
 case "$DISK" in
-  /dev/mmcblk*) echo "   To boot it now:  ./boot-order.sh ${HOST} sd --reboot" ;;
+  */mmcblk*|*/mmc-*) echo "   To boot it now:  ./boot-order.sh ${HOST} sd --reboot" ;;
   *)            echo "   To boot it now:  ./boot-order.sh ${HOST} usb --reboot"
                 echo "   Then:            ./bootstrap.sh ${HOST}" ;;
 esac
