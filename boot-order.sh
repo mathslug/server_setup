@@ -133,5 +133,12 @@ done
 
 say "Verifying"
 ok "active BOOT_ORDER=$(order_active)"
-ok "booted from $(ssh "$HOST" 'findmnt -no SOURCE /')"
+ROOT=$(ssh "$HOST" 'findmnt -no SOURCE /')
+ok "booted from ${ROOT}"
+# An unbootable preferred disk falls through to the other one, and the next
+# step (bootstrap.sh) would then build the server on the wrong disk.
+case "${WANT}:${ROOT}" in
+  sd:/dev/mmcblk*|usb:/dev/sd*) ;;
+  *) die "asked for ${WANT} but ${HOST} booted from ${ROOT}: the ${WANT} disk did not boot" ;;
+esac
 ok "$(ssh "$HOST" 'df -h / | awk "NR==2{print \$2\" filesystem\"}"')"
