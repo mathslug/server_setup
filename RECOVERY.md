@@ -178,6 +178,7 @@ sequence run deliberately, and it is also how the bare metal gets updated:
 ```
 ./provision-rescue.sh <host> /dev/mmcblk0             # a fresh rescue card
 ssh <host> sudo systemctl start rpi-backup.service    # snapshot, now
+./backup/pull-to-laptop.sh                            # a copy off the box too
 ./boot-order.sh <host> sd --reboot
 ssh <host> lsblk -o NAME,SIZE,MODEL,LABEL             # find the primary
 ./provision-disk.sh <host> /dev/sdX
