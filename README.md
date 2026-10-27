@@ -55,7 +55,8 @@ systemd/          system units + install-units.sh, which keeps
 On the Pi: `~podsvc/apps/<name>` is a disposable checkout, `~podsvc/data/<name>`
 is the only thing that matters, `~podsvc/.config/<name>.env` holds secrets.
 `/srv/backup` is the backup disk, mounted by label: `pi/` is plain files,
-`laptop/` is a restic repository.
+`laptop/` is a restic repository. It hangs off a powered hub: on the Pi's own
+USB power it dropped off the bus three times in a day.
 
 ## Adding an app
 
@@ -109,6 +110,14 @@ previous container serving.
 This repo is cloned to `/opt/rpi` and updated daily, which also syncs system
 units and regenerates the tunnel config.
 
+## Updates
+
+The bare metal changes only in a rehearsal rebuild (`RECOVERY.md`). Unattended
+upgrades take Debian's security fixes and nothing else; Raspberry Pi's kernel,
+firmware and bootloader, and cloudflared, come with the fresh images. Between
+rehearsals the machine is exactly what the last one proved, so rehearse about
+monthly.
+
 ## Things that will bite you
 
 **A fresh Raspberry Pi OS image will not reach the network.** Three reasons,
@@ -123,6 +132,14 @@ installs 404. Wait for NTP first.
 **Every image ships the same PARTUUID.** With two disks attached
 `root=PARTUUID=` is ambiguous, and booting one disk's kernel onto the other's
 root looks like success while writes land on the wrong disk.
+
+**A Trixie image re-IDs its own disk on first boot.** `resize` on its kernel
+command line has the initramfs write a random disk ID over the one assigned at
+provisioning. `remote/provision-disk.sh` removes it.
+
+**The bootloader is shared, and switching disks rewrites it.** It is one chip
+both disks boot through, and `rpi-eeprom-config --apply` writes the newest
+bootloader the running disk carries along with the boot order.
 
 **The firmware prepends `cgroup_disable=memory`.** Without the override, memory
 limits are accepted and silently ignored. `/proc/cmdline` is truth; applying it

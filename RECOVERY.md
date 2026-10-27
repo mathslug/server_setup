@@ -1,8 +1,8 @@
 # Recovery
 
 Rebuilding from a wiped disk, using this repo plus the backup disk, which stays
-plugged into the Pi throughout. About 45 minutes, mostly waiting on an image
-write and a build.
+plugged into the Pi throughout. About 25 minutes from the rescue card, plus 10
+if the card has to be built first, mostly waiting on an image write and a build.
 
 Needs `gh` logged in if any app repo is private.
 
@@ -49,9 +49,11 @@ it.
 ./boot-order.sh <host> usb --reboot
 ```
 
-Flips the preference, reboots, waits, reports which disk came up. If it reports
-the wrong one, the new disk boots badly rather than not at all, so the firmware
-sticks with it. Unplug it, power-cycle onto the rescue disk, retry step 2.
+Flips the preference, reboots, waits, and fails unless the disk asked for came
+up. If the Pi never comes back, the new disk boots badly rather than not at all,
+so the firmware sticks with it. Unplug it, power-cycle onto the rescue disk,
+retry step 2. If it reports that the bootloader changed, see
+[Updates and the bootloader](#updates-and-the-bootloader).
 
 ### 4. Bring the services back
 
@@ -63,8 +65,8 @@ Packages, service account, memory cgroup and the reboot it needs, swap,
 `/opt/rpi`, tunnel, every app in `apps/*.conf`, units, timers, verification.
 
 Safe to re-run — it will not restore over existing data without
-`--force-restore`. Passes when every app answers 200 and each database matches
-its backup's size.
+`--force-restore`. Refuses to run on the rescue card. Passes when every app
+answers 200 and each database matches its backup's size.
 
 ## The rescue disk
 
@@ -73,8 +75,10 @@ tunnel, plus `parted`, `smartctl`, `git`, `rsync`, `tmux`. No containers, no
 apps. It exists to get you a shell, and a browser if a monitor is attached.
 
 `BOOT_ORDER` falls through **only when the primary is absent or unbootable**. A
-disk that is corrupt but still presents a boot partition gets chosen forever —
-that is what `boot-order.sh` is for.
+disk that boots badly — a bad kernel, a corrupt root filesystem — gets chosen
+forever. If the Pi is still reachable, that is what `boot-order.sh` is for. If
+it is not, unplug the primary and power-cycle: the firmware finds nothing
+bootable on USB and boots the card.
 
 ```
 ./boot-order.sh <host>                 # what is it now?
@@ -89,10 +93,34 @@ flashed during the *next* boot — so an unplanned reboot applies a change you
 left armed, and losing power during the flash needs physical recovery with a
 dedicated SD image. Everything else here is undone by unplugging something.
 
-Rebuild the rescue disk when your ssh key changes, host keys are regenerated,
-the tunnel is recreated, or you join a new network — and periodically anyway,
-since a disk that never boots never takes a security update. The dashboard
-reports drift and age; only booting it proves it works.
+Rebuild it only as the first step of a rehearsal, never on its own — including
+when your ssh key changes, host keys are regenerated, the tunnel is recreated or
+you join a new network. A card from a newer image can carry a newer bootloader
+than the primary, and only a rehearsal, which reimages the primary from the
+same day's image, can prove both disks boot on it. The dashboard reports drift
+and age; only booting it proves it works.
+
+## Updates and the bootloader
+
+**The bare metal changes only in a rehearsal.** Unattended upgrades take
+Debian's security fixes and nothing else. Raspberry Pi's kernel, firmware and
+bootloader, and cloudflared, arrive when a rehearsal reimages both disks from
+that day's images. Between rehearsals the machine is exactly what the last one
+proved. Rehearse about monthly, and early when an advisory lands. App code and
+this repo still deploy when pushed.
+
+**The bootloader is a chip on the board, not on either disk.** Both disks boot
+through it, and it is what falls through to the rescue card. It changes in one
+place only: every `boot-order.sh` switch writes the boot order *plus the newest
+bootloader the running disk carries*. Nothing on the primary flashes it at
+boot: `setup.sh` masks `rpi-eeprom-update.service`.
+
+So a rehearsal can bring a new bootloader, at the switch from the fresh rescue
+card back to the primary. `boot-order.sh` then prints THE BOOTLOADER CHANGED:
+the primary has booted on it, the rescue card has not. **Do the round trip it
+prints before calling the rehearsal done.** A fallback that has never run on
+the bootloader in the chip is not a proven fallback, and the day you find out is
+the day you need it.
 
 ## What the scripts do not decide
 
@@ -139,15 +167,31 @@ BACKUP_SRC=/var/tmp/anchor ./bootstrap.sh <host>
 ```
 
 **What is not recoverable.** Anything since the last snapshot. And the backup
-disk shares a box, a power supply and a USB bus with the Pi: lose both together
-and the data goes with them.
+disk shares a location and a USB bus with the Pi: lose both together and the
+data goes with them.
 
 ## Proving it works
 
-A recovery path nobody has run is a rumour. Take a backup, then run the
-break-glass sequence deliberately. It passes when row counts match
-`/srv/backup/pi/latest` and every app answers 200.
+A recovery path nobody has run is a rumour. The rehearsal is the break-glass
+sequence run deliberately, and it is also how the bare metal gets updated:
 
-Worth doing after any change to provisioning. Four rehearsals turned up eight
-defects that reading the scripts had not, two of which only appear on a cold
-disk.
+```
+./provision-rescue.sh <host> /dev/mmcblk0             # a fresh rescue card
+ssh <host> sudo systemctl start rpi-backup.service    # snapshot, now
+./boot-order.sh <host> sd --reboot
+ssh <host> lsblk -o NAME,SIZE,MODEL,LABEL             # find the primary
+./provision-disk.sh <host> /dev/sdX
+./boot-order.sh <host> usb --reboot
+./bootstrap.sh <host> --swap-mb 8192
+```
+
+Plus the round trip, if `boot-order.sh` said the bootloader changed. It passes
+when every step ran without a hand on anything, row counts match
+`/srv/backup/pi/latest` and every app answers 200. The apps are down from the
+reboot onto the card to the end of bootstrap, about 25 minutes.
+
+Worth doing after any change to provisioning, too. Four rehearsals in August
+turned up eight defects that reading the scripts had not, two of which only
+appear on a cold disk. October's found five more, among them a rebuild from the
+rescue card that could never have worked: it read the tunnel credentials only
+off a backup disk that the card never mounts.
