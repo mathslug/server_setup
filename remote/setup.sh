@@ -173,6 +173,10 @@ Unattended-Upgrade::Origins-Pattern {
 EOF
 sudo systemctl enable --now unattended-upgrades >/dev/null 2>&1 || true
 ok "enabled: Debian, its security and -updates archives, and Raspberry Pi's"
+# Not the bootloader, though: both disks boot through it, and this unit flashes
+# it unattended at the next boot after rpi-eeprom updates. RECOVERY.md has when.
+sudo systemctl mask rpi-eeprom-update.service >/dev/null 2>&1 || true
+ok "bootloader: never flashed automatically ($(systemctl is-enabled rpi-eeprom-update.service 2>/dev/null))"
 
 # ---------------------------------------------------------------------------
 say "Memory cgroup controller"
