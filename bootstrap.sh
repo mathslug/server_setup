@@ -96,11 +96,12 @@ ok "cloudflared active"
 # and the timer has to be enabled again from here.
 say "Units and timers"
 ssh "$HOST" 'sudo /opt/rpi/systemd/install-units.sh' | sed 's/^/   /'
-ssh "$HOST" "sudo systemctl enable --now rpi-selfupdate.timer rpi-health.timer rpi-rescue-check.timer rpi-backup.timer" >/dev/null 2>&1
+ssh "$HOST" "sudo systemctl enable --now rpi-selfupdate.timer rpi-health.timer rpi-rescue-check.timer rpi-backup.timer rpi-disk-check.timer" >/dev/null 2>&1
 # Once now, or the dashboard serves an empty page and an unchecked rescue row.
 ssh "$HOST" 'sudo systemctl start rpi-health.service' >/dev/null 2>&1 || true
 ssh "$HOST" 'sudo systemctl start rpi-rescue-check.service' >/dev/null 2>&1 || true
-ok "rpi-selfupdate.timer, rpi-health.timer, rpi-rescue-check.timer, rpi-backup.timer"
+ssh "$HOST" 'sudo systemctl start rpi-disk-check.service' >/dev/null 2>&1 || true
+ok "rpi-selfupdate.timer, rpi-health.timer, rpi-rescue-check.timer, rpi-backup.timer, rpi-disk-check.timer"
 
 # --- Apps -------------------------------------------------------------------
 # A rebuilt disk has a new podsvc key, so a private repo's old one is dead.

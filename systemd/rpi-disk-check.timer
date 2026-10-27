@@ -1,0 +1,13 @@
+# Daily, half an hour after the snapshot, while the backup disk is likely
+# still spinning: the check never wakes a sleeping disk.
+
+[Unit]
+Description=Daily SMART check of every disk
+
+[Timer]
+OnCalendar=*-*-* 10:30:00 UTC
+OnBootSec=20min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

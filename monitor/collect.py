@@ -33,6 +33,7 @@ WWW = ROOT / "www"
 BACKUP_STAMP = Path("/var/lib/rpi-health/last-backup")
 LAPTOP_STAMP = Path("/var/lib/rpi-health/last-laptop-backup")
 RESCUE_STAMP = Path("/var/lib/rpi-health/rescue")
+DISKS_STAMP = Path("/var/lib/rpi-health/disks.json")
 BACKUP_MNT = "/srv/backup"
 
 # Snapshots are daily on a machine that is always on, so one miss is already a
@@ -174,6 +175,33 @@ def rescue_disk():
         return parts[1], parts[2], int(time.time()) - int(parts[0])
     except (OSError, ValueError, IndexError):
         return None
+
+
+def disk_health():
+    """(age_seconds, [disk dicts]) from check-disks.py's daily receipt, or None.
+
+    SMART is read once a day there, not here: every five minutes would keep
+    the backup disk from ever spinning down.
+    """
+    try:
+        j = json.loads(DISKS_STAMP.read_text())
+        return int(time.time()) - int(j["checked"]), j["disks"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def disk_rows():
+    """[(label, value, detail, state)] for the dashboard, one per disk."""
+    dh = disk_health()
+    if dh is None:
+        return [("Disk health", "unchecked", "no SMART check has run yet", "warning")]
+    age, disks = dh
+    if age > 3 * 86400:
+        return [("Disk health", "check is stale", f"last checked {human_dt(age)} ago", "warning")]
+    return [(d["name"], d["value"],
+             ("asleep at check, last reading: " if d.get("asleep") else "") + d["detail"],
+             d["state"] if d["state"] in ICON else "unknown")
+            for d in disks]
 
 
 def sample():
@@ -389,6 +417,9 @@ def render(cur, hist):
         age_state(cur.get("backup_age"), BACKUP_WARN_S, BACKUP_CRIT_S),
         age_state(cur.get("laptop_backup_age"), LAPTOP_WARN_S, LAPTOP_CRIT_S),
         "critical" if cur.get("backup_free_gb") is None else "good",
+    ] + [
+        # A disk going bad is the slow failure nothing else here would show.
+        st for _, _, _, st in disk_rows()
     ]
     overall = (
         "critical" if "critical" in checks
@@ -480,6 +511,7 @@ def render(cur, hist):
         row("Last backup", bk_val, bk_detail, bk_st),
         row("Laptop backup", lb_val, lb_detail, lb_st),
         rescue_row,
+        *[row(label, val, detail, st) for label, val, detail, st in disk_rows()],
         row("cloudflared", cur["tunnel"], "tunnel", "good" if cur["tunnel"] == "active" else "critical"),
         row("Power / thermal", cur["throttled"],
             "0x0 is healthy",
@@ -624,6 +656,7 @@ def summary(cur, hist):
         f"  tunnel  {cur['tunnel']}",
         f"  backup  {human_dt(cur['backup_age']) + ' ago' if cur.get('backup_age') is not None else 'NEVER'}",
         f"  laptop  {human_dt(cur['laptop_backup_age']) + ' ago' if cur.get('laptop_backup_age') is not None else 'NEVER'}",
+        *[f"  {label}: {val}" for label, val, _, _ in disk_rows()],
         f"  uptime24 {ok}/{total} samples all-green",
         f"  uptime  {human_dt(cur['uptime'])}",
     ]) + "\n"

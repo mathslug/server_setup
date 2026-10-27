@@ -1,0 +1,10 @@
+# Read SMART from every disk that has it (monitor/check-disks.py).
+
+[Unit]
+Description=Check disk health (SMART)
+ConditionPathExists=/opt/rpi/monitor/check-disks.py
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/rpi/monitor/check-disks.py
+TimeoutStartSec=5min
