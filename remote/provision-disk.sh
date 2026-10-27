@@ -201,6 +201,9 @@ fi
 # The image resizes and applies userconf on first boot. Both are already done
 # here, and leaving it in means one more thing that can behave unexpectedly.
 sed -i 's#init=/usr/lib/raspberrypi-sys-mods/firstboot ##' "$MNT/boot/firmware/cmdline.txt"
+# Trixie does it from the initramfs instead, keyed on `resize`, and draws a new
+# disk ID there too, discarding the one assigned above.
+sed -i 's/ resize\( \|$\)/\1/' "$MNT/boot/firmware/cmdline.txt"
 ok "$(tr ' ' '\n' < "$MNT/boot/firmware/cmdline.txt" | grep PARTUUID)"
 
 # The disk must come up reachable from off the LAN. Installing the tunnel later
@@ -228,6 +231,8 @@ say "Verifying"
 chroot "$MNT" id "$WHO" >/dev/null            || die "user was not created"
 ls "$MNT"/etc/ssh/ssh_host_*_key >/dev/null   || die "host keys did not land"
 grep -q "PARTUUID=${PARTUUID}" "$MNT/etc/fstab" || die "fstab was not rewritten"
+! tr ' ' '\n' < "$MNT/boot/firmware/cmdline.txt" | grep -qx resize \
+  || die "cmdline.txt still asks the initramfs to resize and re-ID the disk"
 # Everything above is fixed by re-running. These are not: without them the disk
 # boots with no network and the only fix is pulling it.
 ls "$MNT"/etc/NetworkManager/system-connections/*.nmconnection >/dev/null 2>&1 \
