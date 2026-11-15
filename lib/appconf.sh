@@ -46,7 +46,7 @@ appconf_load() {
   # leaves out would otherwise keep the previous app's value. An image app has
   # no REPO, and inheriting one turns it into a repo app.
   unset REPO BRANCH QUADLET IMAGE SERVICE DATA_SUBDIR HOSTNAME LOCAL_PORT \
-    HEALTH_PATH BACKUP_DB BACKUP_DIRS UNITS_DIR JOB_RECEIPTS ENV_TEMPLATE
+    HEALTH_PATH BACKUP_DB BACKUP_DIRS UNITS_DIR JOB_RECEIPTS ENV_TEMPLATE DNS
   # shellcheck disable=SC1090
   . "$f"
 

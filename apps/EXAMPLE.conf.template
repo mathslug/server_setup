@@ -57,6 +57,14 @@ HOSTNAME="CHANGEME.mathslug.com"
 LOCAL_PORT=8000
 HEALTH_PATH="/healthz"
 
+# DNS="auto" has the Pi create the DNS record for HOSTNAME itself, on the next
+# self-update, so the app goes live with no further step. A DNS record is what
+# makes the hostname public, so set this ONLY for an app that is meant to be
+# open to the internet as it stands. For an app behind a Cloudflare Access
+# policy, leave it unset: create the policy first and the DNS record by hand,
+# last.
+#DNS="auto"
+
 # ── Backup ──────────────────────────────────────────────────────────────────
 # BACKUP_DB is the SQLite file inside DATA_SUBDIR. backup/snapshot.sh snapshots it
 # with VACUUM INTO, using the Pi's own python3, so the app needs nothing for it.

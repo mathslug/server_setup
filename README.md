@@ -41,7 +41,10 @@ remote/           the halves that execute on the Pi, piped over ssh
 apps/<name>.conf  per-app config — repo, ports, backup, health. One file
                   registers an app everywhere
 deploy-app.sh     clone and build, or pull, then start one app
-auto-deploy.sh    redeploy if the branch or unit changed; driven by a timer
+auto-deploy.sh    redeploy if the branch or unit changed, and make a new app's
+                  first deploy; driven by a timer
+adopt-apps.sh     enable the deploy timer for a new conf, and create its DNS
+                  record if the conf asks; run by the daily self-update
 backup/           snapshot.sh onto the backup disk (rpi-backup.timer, daily),
                   restore.sh back again; laptop-backup.sh pushes the laptop's
                   home folder there weekly with restic; pull-to-laptop.sh
@@ -66,14 +69,29 @@ Copy `apps/EXAMPLE.conf.template`. For your own app, its repo needs a
 published image, leave `REPO` empty and write `apps/<name>.container` here,
 pinned to an exact version. Either way, a database is just `BACKUP_DB`.
 
-Then: Access policy, `deploy-app.sh <name>`, real secrets into the env file,
-DNS last.
+Then push the conf. The Pi does the rest on its next daily self-update: it adds
+the tunnel ingress, enables the app's deploy timer, and the timer makes the
+first deploy. Nobody has to log in.
+
+**A public app** sets `DNS="auto"` in its conf, and the Pi creates the DNS
+record in the same pass. The app is live within a day of the push.
+
+**An app behind Cloudflare Access** leaves `DNS` unset. Create the Access
+policy first, push the conf, and create the DNS record by hand last
+(`sudo cloudflared tunnel route dns mypi <hostname>` on the Pi, or in the
+Cloudflare dashboard). A DNS record is what makes a hostname public, which is
+why it is never automatic unless the conf asks for it.
+
+Three things still need a login: real secrets into the env file, the deploy
+key of a private repo, and waiting less than a day (`sudo systemctl start
+rpi-selfupdate` on the Pi runs the pass now).
 
 Two things not to copy from the app next door:
 
-**Add the conf when you cut DNS over, not before.** The collector starts polling
-the hostname immediately and will book failures against a name that does not
-point here yet.
+**Add the conf when the app is ready to go live, not before.** The collector
+starts polling the hostname as soon as the conf lands, and will book failures
+against a name that does not answer yet. With `DNS="auto"` the gap is the few
+minutes the first build takes.
 
 **Size the memory cap to the app's largest file, not its process.** The cap
 covers page cache, so a database the app reads passes through it. Check with
@@ -106,10 +124,16 @@ renews it.
 
 Nothing can reach the Pi, so deploys are pulled. A timer runs one `git ls-remote`
 every 15 minutes and exits unless the branch moved. A failed build leaves the
-previous container serving.
+previous container serving. The same timer makes an app's first deploy.
 
 This repo is cloned to `/opt/rpi` and updated daily, which also syncs system
-units and regenerates the tunnel config.
+units, regenerates the tunnel config, and adopts any app whose conf is new
+(`adopt-apps.sh`).
+
+The first deploy is not made on a rebuilt disk. There every app is undeployed,
+and `bootstrap.sh` has to check for data, deploy, then restore, in that order.
+`auto-deploy.sh` recognises the rebuild by an app that has a backup but no data
+directory, and leaves it alone.
 
 ## Updates
 
