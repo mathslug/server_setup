@@ -4,8 +4,9 @@
 # a script that git-pulls its own directory while running is a good way to
 # execute half of one version and half of another.
 #
-# Beyond the scripts on disk, it applies only the system units and the tunnel's
-# config. Everything else picks up the new scripts on its timer's next run.
+# Beyond the scripts on disk, it applies the system units and the tunnel's
+# config, and adopts any app whose conf is new. Everything else picks up the
+# new scripts on its timer's next run.
 
 [Unit]
 Description=Update /opt/rpi from git
@@ -28,4 +29,9 @@ ExecStart=/opt/rpi/systemd/install-units.sh
 # the first time an app is added, silently and without error. The script
 # validates before reloading, and is a no-op when nothing changed.
 ExecStart=/opt/rpi/cloudflared/render-config.sh
+# Last, so that nothing waits on it: enable the deploy timer for any app whose
+# conf is new, and create the DNS record for apps that ask for one. The timer
+# then makes the first deploy. Without this a new app needed someone to log in
+# and run deploy-app.sh once.
+ExecStart=/opt/rpi/adopt-apps.sh
 TimeoutStartSec=5min
